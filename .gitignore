@@ -9,3 +9,5 @@ node_modules/
 .next/
 dist/
 .expo/
+.superpowers/
+*.egg-info/
