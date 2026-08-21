@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import Iterable, Protocol
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
-TRACKING_PREFIXES = ("utm_", "fbclid", "gclid", "mc_cid", "mc_eid", "ref_src")
+TRACKING_PREFIXES = ("utm_",)
+TRACKING_EXACT = frozenset({"fbclid", "gclid", "mc_cid", "mc_eid", "ref_src"})
 
 
 @dataclass(slots=True)
@@ -40,7 +41,8 @@ def canonical_url(url: str) -> str:
     path = parts.path.rstrip("/") or "/"
     kept = [
         (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if not any(k.lower().startswith(p) for p in TRACKING_PREFIXES)
+        if not k.lower().startswith(TRACKING_PREFIXES)
+        and k.lower() not in TRACKING_EXACT
     ]
     query = urlencode(sorted(kept))
     return urlunsplit((scheme, netloc, path, query, ""))
