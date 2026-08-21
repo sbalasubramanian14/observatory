@@ -200,6 +200,24 @@ Cold start is solved by a written profile paragraph, embedded on-device into the
 
 The serendipity reservation is not optional: a perfectly personalized feed guarantees the reader misses things, contradicting success criterion 1.
 
+#### Personalization is switchable, per client
+
+Every client exposes a **personalization toggle**. Turned off, the client skips steps 1–3 and 5 entirely and renders the bundle's importance order as published. Only step 4, hiding already-read stories, remains.
+
+This is nearly free to implement precisely because ranking is a client-side re-rank over an already-ordered bundle: "off" is not a separate code path, it is the absence of one.
+
+It matters more than a preference toggle usually would. Personalization is the one component that can silently suppress information, and success criterion 1 is that nothing important is missed. The toggle is the escape hatch that makes that criterion verifiable — the reader can always see the unfiltered truth and compare. A ranker that can be switched off and audited against the raw feed is a fundamentally safer thing to ship than one that cannot.
+
+The toggle is per-device and does not sync, consistent with all other reader state.
+
+#### Known limitation: single-centroid averaging
+
+A single positive centroid is an arithmetic mean, and means of distant points are meaningless. A reader interested in both agent research and semiconductor supply chains has interests that sit far apart in embedding space; their midpoint may match neither well, and fit scores degrade for both.
+
+The symptom to watch for: fit scores clustering in a narrow mid-range with few strong positives — the signature of a centroid stranded between clusters rather than sitting on one.
+
+**Fallback, if that appears:** replace the single positive centroid with a small set of them (k-means over liked-story vectors, k in the range 3–5), scoring fit as the best match across centroids rather than distance to one. This remains training-free, inspectable, and cheap. It is deliberately not built up front — the simple version may well be sufficient, and the multi-centroid version is a contained, local change when needed.
+
 ### 4.4 Publishing mechanics
 
 The Publish stage writes the bundle, commits, and pushes to the public data repo. Because content-addressed files are immutable, each run adds new files rather than rewriting them.
@@ -275,3 +293,5 @@ A good pipeline with an ugly web page is useful on day one; a polished app over 
 6. Score cut points for digest inclusion and Tier 2 eligibility — deliberately unset. They cannot be guessed and must come from a live score distribution observed in phase 1.
 7. Signal weights in the scoring sum — starting values set in phase 1, revised once a score distribution exists.
 8. Bundle retention window — starts at 90 days; revisit once real bundle sizes are known.
+9. Whether a single positive centroid suffices, or the multi-centroid fallback in 4.3 is needed. Trigger to revisit: fit scores clustering in a narrow mid-range with few strong positives. Not to be pre-emptively built.
+10. Default state of the personalization toggle for a first-run client — arguably off, so the reader sees the raw importance feed before any ranking is applied to it.
