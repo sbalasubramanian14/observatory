@@ -35,6 +35,9 @@ A personal intelligence system for AI news. It ingests broadly across the AI wor
 | Backend | Python 3.14 | Ingestion and text-extraction ecosystem; 3.15 lacks torch wheels |
 | Web | Next.js static, hosted on Vercel | Deployed once; data fetched at runtime, so data updates need no rebuild |
 | Mobile | Expo, device SQLite cache | True offline reading, not merely online-with-cache |
+| Theming | Light / dark / system, token-based | System default; no component may define a colour, lint-enforced |
+| CI/CD | GitHub Actions -> Vercel | Explicit workflow, not Git integration, so continuous data commits never trigger web deploys |
+| Repositories | Two: code monorepo + public data repo | Machine-written bundle has a different lifecycle to reviewed code |
 | LLM providers | Gemini API + local Claude Code | Opposite cost shapes map onto the two processing tiers |
 | Extensibility | Plugin protocols for sources, providers, scorers, embedders | Stated hard requirement |
 
@@ -231,6 +234,29 @@ The Publish stage writes the bundle, commits, and pushes to the public data repo
 **Mobile** — Expo. Fetches the same URLs, mirrors the bundle into device SQLite, and serves entirely from that cache. This is genuine offline reading, not online-with-cache: after one sync the app is fully functional with no network.
 
 Clients share the generated TypeScript types for the bundle schema and the fetch/cache layer. They **do not share UI components**; React and React Native component sharing is a known tar pit and these are small screens.
+
+#### Theming
+
+Both clients support **light, dark, and system** themes. System is the default: it follows the OS preference and changes live when the OS does.
+
+Theme is expressed as **design tokens, never as literal colours in components**. A single token set — surface, elevated surface, primary and secondary text, border, accent, and the semantic importance colours — is defined once per theme and consumed everywhere. On web these are CSS custom properties on the root element; on mobile they come from a theme context. Sharing the *token names* across both clients is what keeps them recognisably the same product without sharing component code.
+
+Two rules that make this hold up rather than rot:
+
+- **No component may define a colour.** A component that hardcodes a hex value works in one theme and breaks in the other, and the break is invisible until someone switches. This is lint-enforced, not convention-enforced.
+- **Importance and category colours are semantic tokens too**, and must be legible on both grounds. They are not free to be a brand accent that only works on white.
+
+A reader's theme choice is per-device and does not sync, consistent with all other reader state.
+
+### 4.7 Deployment and CI
+
+The web client deploys to Vercel from the code repository via **GitHub Actions**, not via Vercel's Git integration. The distinction matters: the pipeline commits to the *data* repo continuously, and Git-integration auto-deploys would either fire on every data commit or need fighting to suppress. An explicit workflow deploys only when web client code changes.
+
+The workflow runs on push to the default branch and on pull requests, and does the following in order: install dependencies, typecheck, lint (including the no-hardcoded-colour rule), run unit tests, build, then deploy — preview deployments for pull requests, production for the default branch. A failing typecheck, lint, or test blocks the deploy.
+
+Required repository secrets: `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`.
+
+The Python pipeline has its own workflow running pytest on push, including the golden-set clustering test. It deploys nowhere — it runs on the owner's machine — so CI's job there is purely to stop a regression reaching the branch the machine pulls from.
 
 ### 4.6 Digest
 
