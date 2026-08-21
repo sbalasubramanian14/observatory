@@ -5,19 +5,20 @@
 
 ## 1. Purpose
 
-A personal intelligence system for AI news. It ingests broadly across the AI world, collapses duplicate coverage into single events, explains why each event matters to this reader specifically, and delivers that through a web app, a mobile app, push alerts, and a twice-daily digest.
+A personal intelligence system for AI news. It ingests broadly across the AI world, collapses duplicate coverage into single events, explains why each event matters, and delivers that through a web app, a mobile app, and a twice-daily digest.
 
 ### Success criteria
 
 1. Nothing important is missed. Broad ingestion, no silent coverage loss.
 2. One event produces one row, not forty.
 3. A story can be judged in five seconds without opening it.
-4. Push notifications stay trustworthy enough to leave enabled.
+4. Readable on the phone at 8am on cellular with the laptop shut.
 
 ### Non-goals
 
-- Not a public product at v1. Single user, no signup, no moderation, no billing.
+- Not a public product at v1. Single reader, no signup, no moderation, no billing.
 - Not a live streaming terminal. Feed freshness of ~15–30 minutes is sufficient.
+- **No push notifications.** Explicitly dropped. Reading is pull-only.
 - Not an app-store release. Mobile runs as a dev build on the owner's device.
 - Not a general reader. AI subject matter only.
 
@@ -26,12 +27,14 @@ A personal intelligence system for AI news. It ingests broadly across the AI wor
 | Decision | Choice | Rationale |
 |---|---|---|
 | Audience | Personal, extensible to multi-user | `user_id` present in schema from day one; no auth UI built |
-| Rhythm | Fresh feed + rare push + 2x daily digest | Three views over one scored store; no streaming layer needed |
+| Rhythm | Fresh feed + 2x daily digest | Two views over one scored store; no streaming, no push |
 | Coverage | Research, industry, policy, infrastructure | Full breadth, ~600–1200 items/day admitted |
 | Feed unit | Story cluster | Dedup becomes the data model; one LLM analysis per event, not per article |
-| Runtime | Local-first | Runs on the owner's machine; cloud is a later, separate decision |
+| Runtime | Local-first | Pipeline runs on the owner's machine |
+| **Serving** | **Published static bundle** | **No API server. Pipeline commits JSON to a public repo; clients read it directly** |
 | Backend | Python 3.14 | Ingestion and text-extraction ecosystem; 3.15 lacks torch wheels |
-| Clients | Next.js (web) + Expo (mobile) | Shared generated types, separate UI |
+| Web | Next.js static, hosted on Vercel | Deployed once; data fetched at runtime, so data updates need no rebuild |
+| Mobile | Expo, device SQLite cache | True offline reading, not merely online-with-cache |
 | LLM providers | Gemini API + local Claude Code | Opposite cost shapes map onto the two processing tiers |
 | Extensibility | Plugin protocols for sources, providers, scorers, embedders | Stated hard requirement |
 
@@ -40,12 +43,12 @@ A personal intelligence system for AI news. It ingests broadly across the AI wor
 ### 3.1 Pipeline
 
 ```
-sources -> COLLECT -> NORMALIZE -> EMBED -> CLUSTER -> SCORE -> ENRICH -> api
-           (plugin)   (extract     (local   (multi-    (signals) (LLM,
-                       + canon)     model)   signal)              tiered)
+sources -> COLLECT -> NORMALIZE -> EMBED -> CLUSTER -> SCORE -> ENRICH -> PUBLISH
+           (plugin)   (extract     (local   (multi-    (signals) (LLM,      (static
+                       + canon)     model)   signal)              tiered)    bundle)
 ```
 
-**SQLite is both the store and the queue.** Every item carries a `stage` column; each stage is a worker that claims rows (`WHERE stage=? LIMIT n`), processes, and advances them. No broker, no Redis, no Celery. Resumable after crash, inspectable with any SQL client, zero infrastructure. SQLAlchemy keeps a Postgres migration to a connection-string change.
+**SQLite is both the store and the queue.** Every item carries a `stage` column; each stage is a worker that claims rows (`WHERE stage=? LIMIT n`), processes, and advances them. No broker, no Redis, no Celery. Resumable after crash, inspectable with any SQL client, zero infrastructure.
 
 **Stages:**
 
@@ -55,17 +58,21 @@ sources -> COLLECT -> NORMALIZE -> EMBED -> CLUSTER -> SCORE -> ENRICH -> api
 - **Cluster** — multi-signal assignment to a story; see 3.4.
 - **Score** — five cheap signals, no LLM; see 3.6.
 - **Enrich** — the only paid stage; operates on stories, never items. See 3.5.
+- **Publish** — emits the static bundle and commits it; see 4.
 
 **Failure isolation is a requirement, not a nicety.** A stage catches per-row, records the error on that row, and continues. With 30+ sources one is always broken; a single bad plugin must never stall the feed.
 
 ### 3.2 Data model
 
+Local SQLite, never published:
+
 - `source` — plugin id, config, cadence, enabled, health
-- `item` — raw + normalized fields, url_hash, content_hash, source_id, published_at, text, embedding, embedding_model_id, story_id, stage, error
+- `item` — raw + normalized fields, url_hash, content_hash, source_id, published_at, **full text**, embedding, embedding_model_id, story_id, stage, error
 - `story` — canonical title, kind, first_seen, **updated_at**, **item_count**, score, summary, analysis, analysis_provider, status
 - `entity` + `story_entity` — normalized orgs, models, people, papers
-- `read_state` — user_id, story_id, seen_at, opened_at, dwell_ms, dismissed
-- `edition` — a generated digest, with its story set frozen at generation time
+- `edition` — a generated digest, story set frozen at generation time
+
+Read state lives **on each device**, not here. See 4.3.
 
 `story.updated_at` and `item_count` exist so living threads (stories that develop over days, showing only what changed) become a query later rather than a migration.
 
@@ -86,7 +93,9 @@ batch_size = 256
 - **Workstation** — torch + CUDA + bge-small-en-v1.5. ~203 docs/s measured.
 - **Server** (no GPU) — onnx + CPU + all-MiniLM-L6-v2. ~90 docs/s measured.
 
-`auto` resolves to CUDA when present, otherwise falls back to the ONNX/MiniLM combination, which is the fastest CPU configuration measured. Neither profile is a degraded mode. See Appendix A for the full benchmark.
+`auto` resolves to CUDA when present, otherwise the ONNX/MiniLM combination, which is the fastest CPU configuration measured. Neither profile is a degraded mode. See Appendix A.
+
+Note: the published bundle carries story embeddings, so the model choice is also a **client-visible** contract — the manifest records `embedding_model_id` and clients must discard cached centroids when it changes.
 
 ### 3.4 Clustering
 
@@ -103,15 +112,15 @@ entity overlap only              margin -0.150   safe band NONE
 **Therefore clustering is two steps, not a threshold:**
 
 1. **Candidate generation** — embeddings retrieve near neighbours within a time window. Tuned for recall, not precision.
-2. **Adjudication** — candidates are scored on a blend of cosine, entity overlap, shared outbound links, and time proximity. Pairs that remain ambiguous after blending are escalated to the Tier 1 LLM answering exactly one question: same event, yes or no.
+2. **Adjudication** — candidates scored on a blend of cosine, entity overlap, shared outbound links, and time proximity. Pairs still ambiguous after blending escalate to the Tier 1 LLM answering one question: same event, yes or no.
 
-Embeddings are the recall mechanism, not the decision-maker. Only ambiguous pairs ever cost money.
+Embeddings are the recall mechanism, not the decision-maker. Only ambiguous pairs cost money.
 
 ### 3.5 LLM tiering
 
 - **Tier 0 — free, local.** Embedding, entity extraction, dedup, clustering, scoring. Processes all ~1,000 daily items. No LLM.
 - **Tier 1 — bulk, cheap (Gemini Flash).** Once per *story*. Emits canonical headline, two-sentence summary, category, normalized entities. ~30–80 calls/day.
-- **Tier 2 — deep, scarce (local Claude Code).** Only above a score cut, ~10–20/day. Emits what is genuinely new versus prior art, what it affects in the reader's work, and connections to already-read stories. Budgeted by call count, not tokens, because it is subscription-billed.
+- **Tier 2 — deep, scarce (local Claude Code).** Only above a score cut, ~10–20/day. Emits what is genuinely new versus prior art, what it affects, and connections to earlier stories. Budgeted by call count, not tokens, because it is subscription-billed.
 
 **Provider protocol:**
 
@@ -123,81 +132,103 @@ class Provider(Protocol):
     def health(self) -> ProviderHealth: ...
 ```
 
-The router selects by requested tier and **only ever degrades downward**. If the DEEP provider is rate-limited, the story falls back to its Tier 1 summary and is flagged for retry; it never blocks the feed and never silently upgrades. Every analysis records the provider and model that produced it.
+The router selects by requested tier and **only ever degrades downward**. If the DEEP provider is rate-limited, the story falls back to its Tier 1 summary and is flagged for retry; it never blocks the pipeline and never silently upgrades. Every analysis records the provider and model that produced it.
 
 ### 3.6 Scoring
 
-One weighted sum of five independent Tier-0 signals:
+One weighted sum of five independent Tier-0 signals, all computed in the pipeline:
 
 1. **Source authority** — static per-source weight.
 2. **Cross-source velocity** — count of *independent outlets* within N hours. Counting outlets rather than articles defeats syndication networks.
 3. **Novelty** — max similarity against the last 90 days. High similarity means follow-up, not news.
-4. **Entity weight** — importance of involved orgs/models, learned from reading.
-5. **Personal fit** — closeness to the interest profile (3.7).
+4. **Entity weight** — importance of involved orgs and models.
+5. *(Personal fit is deliberately NOT here — see 4.3.)*
 
-That single score drives all three delivery modes: push above a high cut, digest above a medium cut, feed ranked by it. One number, three consumers.
+This produces an **importance score**, which is reader-independent. It drives digest inclusion and Tier 2 eligibility, and provides the baseline feed order in the bundle.
 
 Each signal is a pluggable function; weights are configuration.
 
 ### 3.7 Personalization
 
-Three inputs, in this order:
+Personalization runs **entirely on the client**, because the bundle is public and must carry no reader signal. See 4.3 for the mechanism.
 
-1. **Written profile.** A prose paragraph describing interests, embedded into a profile vector. Solves cold start on day one with no training data.
-2. **Implicit signals.** Opened, dwell time, saved, **dismissed**. Dismissals carry the most information and are usually discarded by such systems.
-3. **Explicit corrections.** A more/less-like-this control.
+## 4. Serving
 
-**Mechanism, deliberately simple:** maintain a positive and a negative centroid in embedding space, nudged on interaction. Fit is `cos(story, positive) - cos(story, negative)`. No training, no learned ranker.
+There is **no API server**. The pipeline's terminal stage writes a static bundle and commits it to a public Git repository; clients read that directly over a CDN. This removes a server to run, secure, and keep awake, and it means the feed is readable whether or not the laptop exists.
 
-Rationale: a single user will never produce the label volume to justify a learned ranker, and the characteristic failure — a feed that quietly hides things and cannot explain itself — is what kills these projects. This is fully inspectable and instantly revertible.
+It also removes duplicated work: ranking and rendering happen once, at publish time, rather than being recomputed per request to produce output that is identical until the next pipeline run.
 
-**Serendipity reservation.** A fixed 15% of the feed is reserved for high-importance, low-personal-fit stories, visibly labelled. A perfectly personalized feed guarantees the reader misses things, which directly contradicts success criterion 1.
-
-## 4. Clients
-
-### 4.1 API contract
-
-FastAPI with Pydantic models as the single source of truth, emitting an OpenAPI schema from which TypeScript types are generated. The contract is generated, never hand-maintained, which removes the main cost of a split stack.
+### 4.1 Bundle layout
 
 ```
-GET  /feed?cursor=&limit=       ranked stories
-GET  /story/{id}                story + evidence items + analysis
-POST /story/{id}/interaction    opened | dismissed | saved
-GET  /edition/latest            the digest
-GET  /search?q=                 semantic + keyword over the archive
-GET  /health/sources            connector health
+manifest.json                    small, always fetched fresh
+feed/page-<n>-<hash>.json        importance-ranked stories, paginated
+story/<id>-<hash>.json           story detail: evidence links + analysis
+edition/<date>-<slot>.json       digest
+embeddings/<window>-<hash>.bin   story vectors for client-side ranking
+sources.json                     connector health and coverage report
 ```
 
-`/health/sources` is load-bearing: silent coverage loss is the failure mode that would defeat the whole product.
+**Manifest plus content-addressed filenames.** Every data file's name contains a content hash, making it immutable and therefore cacheable forever by any CDN. Only `manifest.json` is refetched, and it is small. This solves staleness and caching in one move — no cache purging, no CDN TTL fighting.
 
-### 4.2 Web and mobile
+### 4.2 What must never enter the bundle
 
-- **Web** — Next.js, server-rendered feed read.
-- **Mobile** — Expo dev build on the owner's device. No app store at v1.
+The repo is public. Two hard exclusions:
 
-The clients share the generated API types and data layer. They **do not share UI components**; React and React Native component sharing is a known tar pit and these are small screens.
+- **Full article text.** Republishing publishers' article bodies is redistribution of copyrighted work. Full text stays in local SQLite. The bundle carries titles, canonical links, metadata, and the system's own generated summaries and analysis — which is both legally clean and far smaller.
+- **Reader behaviour.** Opens, dwell times, dismissals, and the interest profile never leave the device.
 
-### 4.3 Push
+`sources.json` is included deliberately: silent coverage loss is the failure mode that would defeat success criterion 1, and it must be visible in the client.
 
-Delivered via Expo's push service, avoiding direct APNs/FCM work.
+### 4.3 Client-side personalization
 
-The engineering problem is trust, not plumbing: two bad notifications and the feature is dead. Rules: fire only above the high cut; hard cap 2–3/day with cooldown; never push a story whose cluster has already been read.
+The bundle ships stories ranked by **importance only**, plus each story's 384-float embedding (~1.5 KB per story, ~75 KB/day — negligible).
 
-**Shadow mode is required before enabling.** For the first week the system logs every notification it would have sent and sends none. The threshold is then set against observed data rather than guessed.
+Each client then, locally:
 
-### 4.4 Digest
+1. Maintains a **positive and a negative centroid** in embedding space, nudged by opens, dwell, saves, and dismissals.
+2. Computes fit as `cos(story, positive) - cos(story, negative)`.
+3. Re-ranks the importance-ordered feed by a blend of importance and fit.
+4. Filters out already-read stories.
+5. Reserves **15%** of feed slots for high-importance, low-fit stories, visibly labelled.
 
-An `edition` is a stored row, not a live query: everything above the medium cut since the previous edition, grouped by category, generated twice daily. Being a stored artifact makes it stable and linkable, and it does not reshuffle while being read.
+This is a dot product over a few hundred vectors — free on any device.
+
+Three consequences, all good: the reader's profile and history never leave their devices; there is no write-back sync to build; and the mechanism stays fully inspectable and instantly revertible. A learned ranker is rejected for the same reason as before — a single reader will never produce the label volume to justify one, and a feed that quietly hides things and cannot explain itself is what kills these projects.
+
+Cold start is solved by a written profile paragraph, embedded on-device into the initial positive centroid.
+
+The serendipity reservation is not optional: a perfectly personalized feed guarantees the reader misses things, contradicting success criterion 1.
+
+### 4.4 Publishing mechanics
+
+The Publish stage writes the bundle, commits, and pushes to the public data repo. Because content-addressed files are immutable, each run adds new files rather than rewriting them.
+
+**Repo growth must be managed from day one.** At roughly 50 stories/day the bundle grows a few hundred KB per day; unmanaged, Git history reaches hundreds of MB within a year. The Publish stage therefore prunes files outside a rolling window (default 90 days) and the repo is periodically history-squashed. Deep archive stays in local SQLite, which is the system of record.
+
+### 4.5 Clients
+
+**Web** — Next.js, statically exported, hosted on Vercel. Deployed **once**; it fetches the manifest and bundle at runtime. Data updates therefore require no rebuild and no redeploy, which also keeps the pipeline's publish cadence independent of Vercel's deployment limits.
+
+**Mobile** — Expo. Fetches the same URLs, mirrors the bundle into device SQLite, and serves entirely from that cache. This is genuine offline reading, not online-with-cache: after one sync the app is fully functional with no network.
+
+Clients share the generated TypeScript types for the bundle schema and the fetch/cache layer. They **do not share UI components**; React and React Native component sharing is a known tar pit and these are small screens.
+
+### 4.6 Digest
+
+An `edition` is a published artifact, not a live query: everything above the medium importance cut since the previous edition, grouped by category, generated twice daily. Being immutable makes it stable and linkable, and it does not reshuffle while being read.
 
 ## 5. Scheduling
 
-The pipeline runs as `python -m feed.pipeline run`, a plain CLI. Locally that is Windows Task Scheduler or in-process APScheduler; on a VPS it is cron or a systemd timer. The pipeline has no knowledge of what triggered it, which keeps the local-first-then-maybe-cloud path open.
+The pipeline runs as `python -m feed.pipeline run`, a plain CLI. Locally that is Windows Task Scheduler or in-process APScheduler; on a VPS it would be cron or a systemd timer. The pipeline has no knowledge of what triggered it, which keeps the local-first-then-maybe-cloud path open.
 
 ## 6. Testing
 
 Pipeline stages are pure functions over rows and unit-test with fixtures.
 
 **Clustering requires a golden-set regression test.** A hand-labelled corpus (seeded from the 22-item spike corpus) is asserted on every change to clustering signals, checking that the safe-threshold band does not narrow. The measured band is 0.02 wide with cosine alone and 0.10 blended; a regression here would silently wreck the feed and no other test would catch it.
+
+**The bundle schema requires a contract test.** Since clients are deployed independently of the pipeline, a published bundle that violates the schema breaks readers with no server to hotfix. The Publish stage validates against the schema before committing, and refuses to publish on failure.
 
 ## 7. Appendix A — Measured benchmarks
 
@@ -225,20 +256,22 @@ Notes:
 
 ## 8. Build order
 
-The system is built in four phases, each independently useful. Later phases must not be started before the preceding one runs on real data.
+Four phases, each independently useful. Later phases must not begin before the preceding one runs on real data.
 
-1. **Pipeline to stored stories.** Collect through Score, plus 5–10 sources and the CLI. Output is inspected in SQL. This phase is where clustering thresholds get derived from real data, replacing the directional values in Appendix A.
-2. **Enrichment and API.** Tier 1 and Tier 2 providers, the router, and the six endpoints. Output is inspected as JSON.
-3. **Web client and digest.** The first phase with a human-facing surface.
-4. **Mobile client and push.** Includes the mandatory shadow-mode week before notifications are enabled.
+1. **Pipeline to stored stories.** Collect through Score, plus 5–10 sources and the CLI. Output inspected in SQL. This is where clustering thresholds get derived from real data, replacing the directional values in Appendix A.
+2. **Enrichment and publishing.** Tier 1 and Tier 2 providers, the router, the bundle writer, and the push-to-repo mechanics. Output inspected as JSON in the public repo.
+3. **Web client.** Next.js reader on Vercel, including client-side ranking and the digest view. First human-facing surface.
+4. **Mobile client.** Expo app with device SQLite cache and offline reading.
 
 A good pipeline with an ugly web page is useful on day one; a polished app over a mediocre feed is worthless. Phase order reflects that.
 
 ## 9. Open questions
 
-1. Tier 2 daily budget — starts at 20 stories/day, to be tuned against observed Claude Code rate limits.
-2. Serendipity share — starts at 15%, to be tuned by feel after a week.
-3. Initial source list and per-source authority weights — deferred to the implementation plan.
-4. Clustering time-window width — a starting value must be derived from real data during phase 1.
-5. Score cut points for push, digest, and Tier 2 eligibility — three thresholds on the single score, all deliberately unset. They cannot be guessed and must come from a live score distribution observed in phase 1; the push cut is additionally validated by the shadow-mode week in phase 4.
-6. Signal weights in the scoring sum — starting values to be set in phase 1 and revised once a score distribution exists.
+1. **The public data repo** — to be supplied by the owner. Determines bundle base URL and CDN strategy (raw Git host vs jsDelivr vs Vercel-served).
+2. Tier 2 daily budget — starts at 20 stories/day, to be tuned against observed Claude Code rate limits.
+3. Serendipity share — starts at 15%, to be tuned by feel after a week.
+4. Initial source list and per-source authority weights — deferred to the implementation plan.
+5. Clustering time-window width — starting value must be derived from real data in phase 1.
+6. Score cut points for digest inclusion and Tier 2 eligibility — deliberately unset. They cannot be guessed and must come from a live score distribution observed in phase 1.
+7. Signal weights in the scoring sum — starting values set in phase 1, revised once a score distribution exists.
+8. Bundle retention window — starts at 90 days; revisit once real bundle sizes are known.
