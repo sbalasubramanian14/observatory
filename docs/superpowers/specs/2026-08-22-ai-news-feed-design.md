@@ -37,7 +37,7 @@ A personal intelligence system for AI news. It ingests broadly across the AI wor
 | Mobile | Expo, device SQLite cache | True offline reading, not merely online-with-cache |
 | Theming | Light / dark / system, token-based | System default; no component may define a colour, lint-enforced |
 | CI/CD | GitHub Actions -> Vercel | Explicit workflow, not Git integration, so continuous data commits never trigger web deploys |
-| Repositories | Two: code monorepo + public data repo | Machine-written bundle has a different lifecycle to reviewed code |
+| Repositories | `observatory` (private) + `observatory-almanac` (public) | Machine-written bundle has a different lifecycle to reviewed code |
 | LLM providers | Gemini API + local Claude Code | Opposite cost shapes map onto the two processing tiers |
 | Extensibility | Plugin protocols for sources, providers, scorers, embedders | Stated hard requirement |
 
@@ -311,7 +311,7 @@ A good pipeline with an ugly web page is useful on day one; a polished app over 
 
 ## 9. Open questions
 
-1. **The public data repo** — to be supplied by the owner. Determines bundle base URL and CDN strategy (raw Git host vs jsDelivr vs Vercel-served).
+1. **CDN strategy for the bundle** — the data repo is `observatory-almanac` (public). Remaining choice is how clients fetch it: raw GitHub host, jsDelivr, or served through Vercel. Content-addressed filenames make any of them workable; the decision is about cache behaviour and rate limits, and is deferred to phase 2 when real bundle sizes exist.
 2. Tier 2 daily budget — starts at 20 stories/day, to be tuned against observed Claude Code rate limits.
 3. Serendipity share — starts at 15%, to be tuned by feel after a week.
 4. Initial source list and per-source authority weights — deferred to the implementation plan.
