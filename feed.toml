@@ -1,0 +1,15 @@
+# feed.toml
+[database]
+url = "sqlite:///feed.db"
+
+[embedding]
+backend = "auto"
+model = "BAAI/bge-small-en-v1.5"
+device = "auto"
+batch_size = 256
+
+[clustering]
+window_hours = 48
+cosine_weight = 0.6
+entity_weight = 0.4
+merge_threshold = 0.50
