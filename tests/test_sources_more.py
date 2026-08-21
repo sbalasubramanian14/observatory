@@ -133,3 +133,79 @@ def test_importing_feed_sources_twice_does_not_raise():
     import feed.sources  # second import must be a no-op (sys.modules cache)
 
     importlib.import_module("feed.sources")
+
+
+# --- Coverage-loss logging (code review follow-up) -------------------------
+#
+# Category A (unexpected shape: unparseable arxiv id, linkless rss/github
+# entry) must log at WARNING with enough detail to identify the offender.
+# Category B (hackernews' intentional score/type/url filtering) must NOT
+# log -- it's routine, and logging it would drown Category A in noise.
+
+import logging
+
+
+def test_arxiv_logs_warning_for_unparseable_id(tmp_path, caplog):
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/hep-th/9901001v3</id>
+    <title>Old-style id, unparseable by the version regex</title>
+  </entry>
+</feed>
+"""
+    p = tmp_path / "arxiv_malformed.xml"
+    p.write_text(xml, encoding="utf-8")
+    src = build_source("arxiv", "arxiv:cs.AI", {"path": str(p)})
+    with caplog.at_level(logging.WARNING, logger="feed.sources.arxiv"):
+        items = list(src.fetch(since=None))
+    assert items == []
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.WARNING
+    assert "hep-th/9901001v3" in caplog.records[0].message
+
+
+def test_rss_logs_warning_for_linkless_entry(tmp_path, caplog):
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <item><title>No link here</title></item>
+</channel></rss>
+"""
+    p = tmp_path / "rss_linkless.xml"
+    p.write_text(xml, encoding="utf-8")
+    src = build_source("rss", "rss:example", {"path": str(p)})
+    with caplog.at_level(logging.WARNING, logger="feed.sources.rss"):
+        items = list(src.fetch(since=None))
+    assert items == []
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.WARNING
+    assert "No link here" in caplog.records[0].message
+
+
+def test_github_releases_logs_warning_for_linkless_entry(tmp_path, caplog):
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <title>Release with no link element</title>
+  </entry>
+</feed>
+"""
+    p = tmp_path / "gh_linkless.xml"
+    p.write_text(xml, encoding="utf-8")
+    src = build_source("github_releases", "gh:vllm", {"repo": "vllm-project/vllm", "path": str(p)})
+    with caplog.at_level(logging.WARNING, logger="feed.sources.github_releases"):
+        items = list(src.fetch(since=None))
+    assert items == []
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.WARNING
+    assert "Release with no link element" in caplog.records[0].message
+
+
+def test_hackernews_does_not_log_for_intentional_filtering(caplog):
+    # Score/type/url filtering is HN doing its job, not a coverage gap.
+    # Logging it would emit noise on every run and drown category-A signals.
+    src = build_source("hackernews", "hn", {"path": str(FIX / "sample_hn.json"), "min_score": 100})
+    with caplog.at_level(logging.DEBUG, logger="feed.sources.hackernews"):
+        items = list(src.fetch(since=None))
+    assert len(items) == 1  # sanity: filtering is still happening
+    assert caplog.records == []

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,8 @@ from feed.sources.base import RawItem
 from feed.sources.registry import register
 
 _ABS = re.compile(r"arxiv\.org/abs/(?P<id>[\d.]+?)(?:v\d+)?$")
+
+log = logging.getLogger(__name__)
 
 
 @register("arxiv")
@@ -40,8 +43,10 @@ class ArxivSource:
     def fetch(self, since: datetime | None) -> Iterable[RawItem]:
         parsed = feedparser.parse(self._raw())
         for entry in parsed.entries:
-            match = _ABS.search(entry.get("id", ""))
+            raw_id = entry.get("id", "")
+            match = _ABS.search(raw_id)
             if not match:
+                log.warning("arxiv: unparseable entry id, skipping: %r", raw_id)
                 continue
             url = f"https://arxiv.org/abs/{match.group('id')}"
             tm = entry.get("published_parsed") or entry.get("updated_parsed")

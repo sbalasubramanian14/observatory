@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -6,6 +7,8 @@ import feedparser
 import httpx
 from feed.sources.base import RawItem, canonical_url
 from feed.sources.registry import register
+
+log = logging.getLogger(__name__)
 
 
 @register("rss")
@@ -36,9 +39,11 @@ class RssSource:
 
     def fetch(self, since: datetime | None) -> Iterable[RawItem]:
         parsed = feedparser.parse(self._raw())
-        for entry in parsed.entries:
+        for i, entry in enumerate(parsed.entries):
             link = entry.get("link")
             if not link:
+                identifier = (entry.get("title") or "").strip() or f"entry #{i}"
+                log.warning("rss: entry with no link, skipping: %s", identifier)
                 continue
             published = None
             tm = entry.get("published_parsed") or entry.get("updated_parsed")
