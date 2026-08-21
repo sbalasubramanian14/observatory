@@ -8,11 +8,11 @@ def make_engine(url: str) -> Engine:
 
     @event.listens_for(engine, "connect")
     def _sqlite_pragmas(dbapi_conn, _record):
+        if engine.dialect.name != "sqlite":
+            return
         cur = dbapi_conn.cursor()
         cur.execute("PRAGMA foreign_keys=ON")
-        is_memory = engine.url.database in (None, "", ":memory:")
-        if not is_memory:
-            cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA journal_mode=WAL")
         cur.close()
 
     return engine
