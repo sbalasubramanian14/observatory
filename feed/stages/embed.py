@@ -67,29 +67,43 @@ def embed(session: Session, embedder: Embedder, limit: int = 256) -> StageResult
     if not items:
         return result
 
-    try:
-        vectors = embedder.encode([embed_text_for(i) for i in items])
-    except Exception as exc:
+    def _fallback(reason: str, exc: Exception) -> StageResult:
         # The fast batched path is what this stage exists for -- see the
         # module-level rationale. But Stage.FAILED is terminal, and a
         # single malformed row (or a transient backend hiccup) must not
         # strand every other healthy item in the batch. Fall back to
         # encoding one item at a time so only the genuinely-bad rows end
-        # up FAILED; this fallback runs ONLY on this error path.
+        # up FAILED; this fallback runs ONLY on an error path.
         session.rollback()
         log.warning(
-            "embed batch of %d failed, falling back to per-item encoding: %s",
-            len(items), exc,
+            "embed batch of %d failed (%s), falling back to per-item encoding: %s",
+            len(items), reason, exc,
         )
         for item in items:
             _embed_one(session, embedder, item.id, result)
         return result
 
-    for item, vec in zip(items, vectors):
-        item.embedding = pack(vec)
-        item.embedding_model_id = embedder.model_id
-        item.stage = Stage.EMBEDDED
-        item.error = None
-    session.commit()
+    try:
+        vectors = embedder.encode([embed_text_for(i) for i in items])
+    except Exception as exc:
+        return _fallback("encode", exc)
+
+    # I2 fix: this used to sit outside any try. pack() raising on a
+    # malformed vector, or session.commit() raising (constraint violation,
+    # full disk, transient DB hiccup), escaped embed() entirely -- on the
+    # path that runs on EVERY successful encode(), not just the rare
+    # fallback -- which aborted cmd_run before cluster or score ever ran.
+    # Route the same failure into the same per-item fallback used for an
+    # encode() failure, so a bad row here is isolated exactly the same way.
+    try:
+        for item, vec in zip(items, vectors):
+            item.embedding = pack(vec)
+            item.embedding_model_id = embedder.model_id
+            item.stage = Stage.EMBEDDED
+            item.error = None
+        session.commit()
+    except Exception as exc:
+        return _fallback("pack/commit", exc)
+
     result.processed = len(items)
     return result

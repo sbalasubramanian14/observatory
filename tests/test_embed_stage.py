@@ -177,6 +177,62 @@ def test_pack_failure_in_fallback_isolates_the_row_and_others_still_embed(sessio
     assert items[2].stage is Stage.EMBEDDED
 
 
+def test_pack_failure_on_the_batch_success_path_does_not_escape_embed(session, monkeypatch):
+    """I2: encode() succeeds (the fast/normal path, not the fallback), but
+    pack() then raises while assigning the batch's vectors. Before the fix
+    that loop-and-commit block sat outside any try in embed(), so this
+    exception would propagate straight out of embed() itself -- aborting
+    cmd_run before cluster or score ever ran, for every item in the batch,
+    not just the malformed one. This proves embed() now catches it, rolls
+    back, and recovers via the same per-item isolation the encode()-failure
+    path already gets -- so a single bad row no longer takes down the run.
+    """
+    _seed(session, n=3)
+    emb = FakeEmbedder()  # encode() succeeds normally; batch path is taken
+
+    calls = {"n": 0}
+    def flaky_pack(vec):
+        calls["n"] += 1
+        if calls["n"] == 1:  # fails during the FIRST pass (the batch loop)
+            raise ValueError("corrupt vector shape")
+        return real_pack(vec)
+    monkeypatch.setattr("feed.stages.embed.pack", flaky_pack)
+
+    res = embed(session, emb)  # must not raise
+
+    assert res.processed == 3
+    assert res.failed == 0
+    items = session.query(Item).order_by(Item.id).all()
+    assert all(i.stage is Stage.EMBEDDED for i in items)
+
+
+def test_commit_failure_on_the_batch_success_path_does_not_escape_embed(session, monkeypatch):
+    """Same finding, but for the batch's own session.commit() call. Before
+    the fix, a RuntimeError there propagated straight out of embed(),
+    leaving every item in the batch stuck at NORMALIZED with no StageResult
+    returned and the rest of cmd_run's pipeline never reached. It must now
+    be caught and recovered via the per-item fallback instead.
+    """
+    _seed(session, n=3)
+    emb = FakeEmbedder()
+
+    calls = {"n": 0}
+    real_commit = session.commit
+    def flaky_commit():
+        calls["n"] += 1
+        if calls["n"] == 1:  # the batch's own commit, not a fallback commit
+            raise RuntimeError("disk full during batch commit")
+        return real_commit()
+    monkeypatch.setattr(session, "commit", flaky_commit)
+
+    res = embed(session, emb)  # must not raise
+
+    assert res.processed == 3
+    assert res.failed == 0
+    items = session.query(Item).order_by(Item.id).all()
+    assert all(i.stage is Stage.EMBEDDED for i in items)
+
+
 def test_commit_failure_in_fallback_isolates_the_row_and_others_still_embed(session, monkeypatch):
     """Same finding, but for the session.commit() half of the uncovered
     success path. The second item's success-path commit raises; that must
