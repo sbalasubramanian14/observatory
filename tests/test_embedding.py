@@ -11,6 +11,11 @@ from feed.embedding.base import pack, unpack
 from feed.embedding.resolve import resolve
 from feed.embedding import build_embedder
 
+# The repo-root feed.toml, resolved from this file's location so the test is
+# independent of the pytest invocation's cwd (see tests/golden/test_golden.py
+# for the same pattern).
+FEED_TOML = Path(__file__).resolve().parents[1] / "feed.toml"
+
 
 def test_pack_roundtrips_exactly():
     v = np.random.rand(384).astype(np.float32)
@@ -137,3 +142,54 @@ def test_torch_embedder_produces_correct_shape_and_handles_empty():
 
     empty = emb.encode([])
     assert empty.shape == (0, emb.dimensions)
+
+
+def test_shipped_feed_toml_resolves_to_the_intended_cpu_profile(monkeypatch):
+    """C2: feed.toml previously pinned `model = "BAAI/bge-small-en-v1.5"`
+    explicitly. Because resolve() only swaps an unset model, that explicit
+    choice survived onto every CPU machine and forced the (onnx, bge-small,
+    cpu) combination -- measured at 2.8 docs/s, ~6 minutes per 1000 items,
+    32x slower than the intended (onnx, MiniLM, cpu) profile at 89.6 docs/s.
+    It also meant threshold_for('BAAI/bge-small-en-v1.5') returned the
+    global 0.50 fallback instead of the 0.35 actually measured for MiniLM
+    on the golden corpus, since that key never matched.
+
+    This pins what the REAL, DEPLOYED feed.toml resolves to on a CPU
+    machine (no CUDA) end to end through load_config() -> resolve() ->
+    threshold_for(), so a future re-introduction of an explicit `model =`
+    line in feed.toml fails this test immediately instead of silently
+    stranding the measured threshold again.
+    """
+    monkeypatch.setattr("feed.embedding.resolve.cuda_available", lambda: False)
+    cfg = load_config(FEED_TOML)
+
+    assert "model" not in cfg.embedding.model_fields_set, (
+        "feed.toml must not pin an explicit embedding model -- doing so "
+        "defeats resolve()'s CPU/GPU auto-selection (see C2)"
+    )
+
+    backend, model, device = resolve(cfg.embedding)
+    assert (backend, model, device) == (
+        "onnx",
+        "sentence-transformers/all-MiniLM-L6-v2",
+        "cpu",
+    )
+    assert cfg.clustering.threshold_for(model) == 0.35
+
+
+def test_shipped_feed_toml_global_threshold_sits_inside_bges_measured_safe_band():
+    """C2: the global merge_threshold (used whenever a model id has no
+    entry in merge_thresholds -- i.e. the GPU/bge-small path, since only
+    MiniLM has an override) must sit inside the safe band the spike run
+    actually measured for bge-small: 0.46-0.56 (see
+    .superpowers/sdd/2026-08-22-ai-news-feed-phase1/progress.md, the F3
+    pre-flight ruling). feed.toml ships 0.50, which is inside that band.
+    This does not re-run the (expensive, bge-specific) spike measurement --
+    there is no committed bge golden corpus to re-derive it from -- but it
+    pins the shipped constant against the recorded measurement so a future
+    edit to either the toml value or this test's asserted band cannot drift
+    apart silently.
+    """
+    cfg = load_config(FEED_TOML)
+    BGE_SAFE_BAND_LOW, BGE_SAFE_BAND_HIGH = 0.46, 0.56
+    assert BGE_SAFE_BAND_LOW <= cfg.clustering.merge_threshold <= BGE_SAFE_BAND_HIGH

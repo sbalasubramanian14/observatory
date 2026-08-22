@@ -4,7 +4,17 @@ url = "sqlite:///feed.db"
 
 [embedding]
 backend = "auto"
-model = "BAAI/bge-small-en-v1.5"
+# No explicit `model =` here, deliberately (C2 fix): resolve() only swaps
+# in the fast CPU default (MiniLM) when the model field is left UNSET
+# (feed/embedding/resolve.py checks model_fields_set, not the value). A
+# pinned "BAAI/bge-small-en-v1.5" here used to survive onto every CPU
+# machine, forcing the anomalously slow onnx+bge-small combination
+# (measured 2.8 docs/s, ~6 min/1000 items, vs 89.6 docs/s for onnx+MiniLM)
+# and silently stranding the 0.35 MiniLM threshold below, since
+# threshold_for('BAAI/bge-small-en-v1.5') was never in merge_thresholds and
+# fell back to the GPU-tuned global 0.50. Leaving model unset lets
+# resolve() pick MiniLM on CPU and bge-small on CUDA, as designed. See
+# tests/test_embedding.py::test_shipped_feed_toml_resolves_to_the_intended_cpu_profile.
 device = "auto"
 batch_size = 256
 
