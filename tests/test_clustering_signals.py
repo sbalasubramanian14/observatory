@@ -47,3 +47,24 @@ def test_blend_matches_the_measured_weights():
     # spec Appendix A: 0.6*cosine + 0.4*entities
     assert blend(1.0, 0.0, cosine_weight=0.6, entity_weight=0.4) == 0.6
     assert blend(0.0, 1.0, cosine_weight=0.6, entity_weight=0.4) == 0.4
+
+def test_cosine_returns_zero_never_one_for_nan_or_inf_contaminated_vectors():
+    # A raw nan comparison (nan >= threshold) fails SAFE: always False, so
+    # nothing merges. A clamp built on Python's min/max would launder that
+    # nan into a fabricated 1.0 (min(1.0, nan) == 1.0), which fails UNSAFE:
+    # it would force a merge of unrelated stories on corrupted input. Every
+    # case below must be 0.0, never 1.0.
+    nan_vec = np.array([np.nan, 1.0, 2.0], dtype=np.float32)
+    other_vec = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    zero_vec = np.zeros(3, dtype=np.float32)
+    inf_vec = np.array([np.inf, 1.0, 2.0], dtype=np.float32)
+    single_nan = np.array([1.0, np.nan, 3.0], dtype=np.float32)
+
+    assert cosine(nan_vec, nan_vec) == 0.0
+    assert cosine(nan_vec, other_vec) == 0.0
+    assert cosine(nan_vec, zero_vec) == 0.0
+    assert cosine(inf_vec, inf_vec) == 0.0
+    assert cosine(single_nan, other_vec) == 0.0
+    # zero-vector case (no nan/inf involved) must still be 0.0, not broken
+    # by the finiteness check.
+    assert cosine(zero_vec, other_vec) == 0.0
