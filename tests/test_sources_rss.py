@@ -4,6 +4,7 @@ from feed.sources.base import canonical_url, url_hash
 from feed.sources.registry import build_source
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_rss.xml"
+UNDATED_FIXTURE = Path(__file__).parent / "fixtures" / "sample_rss_undated.xml"
 
 def test_canonical_url_strips_tracking_params():
     got = canonical_url("https://example.com/a?utm_source=rss&utm_medium=feed&id=7")
@@ -29,6 +30,26 @@ def test_rss_source_filters_by_since():
     cutoff = datetime(2026, 8, 18, 10, 0, tzinfo=timezone.utc)
     items = list(src.fetch(since=cutoff))
     assert [i.title for i in items] == ["EU delays AI Act"]
+
+def test_undated_item_survives_the_since_filter():
+    # Adjacent to C1: an entry with no <pubDate> at all must never be
+    # dropped by `since` filtering just because we can't compare it against
+    # a cutoff. Every source's fetch() applies `since is not None and
+    # published is not None and published <= since` -- the `published is
+    # not None` guard means an undated item (published=None) always
+    # survives, regardless of how far in the past `since` is. This pins
+    # that already-correct behaviour with committed coverage.
+    src = build_source("rss", "rss:example", {"path": str(UNDATED_FIXTURE)})
+    cutoff = datetime(2026, 8, 19, 0, 0, tzinfo=timezone.utc)  # after both entries' dates
+    items = list(src.fetch(since=cutoff))
+    titles = [i.title for i in items]
+    assert "Mystery post with no publish date" in titles
+    undated = next(i for i in items if i.title == "Mystery post with no publish date")
+    assert undated.published_at is None
+    # The dated entry, safely before the cutoff, is correctly filtered out --
+    # proving this isn't just a case where the filter does nothing at all.
+    assert "DeepSeek releases V4" not in titles
+
 
 def test_unknown_plugin_raises():
     import pytest
