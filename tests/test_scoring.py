@@ -205,3 +205,42 @@ def test_score_stories_isolates_a_bad_story_from_the_rest_of_the_batch(session):
     assert good.score is not None
     session.refresh(bad)
     assert bad.score is None
+
+
+def test_achievable_score_range_is_zero_to_one_with_entity_zero_weighted(session):
+    """With entity's configured weight at 0.0 (see feed/config.py), the
+    achievable score range must be the full [0, 1], not the [0.075, 0.925]
+    a nonzero constant entity signal would compress it to. A story with
+    every real signal at its minimum must score exactly 0.0, and one with
+    every real signal at its maximum must score exactly 1.0 -- entity_weight()
+    still runs (and still returns its 0.5 default, since no Entity rows
+    exist), but at weight 0.0 it must not move the result at all.
+    """
+    weights = ScoringConfig().weights
+    assert weights["entity"] == 0.0
+
+    prior = _story(session, outlets=["old"], vec=(1.0, 0.0), age_h=100)
+
+    # Minimum: zero-authority source, zero outlets (forced), exact
+    # near-duplicate of the strictly-earlier `prior` story.
+    lo = _story(session, outlets=["z"], sources_authority=0.0, vec=(1.0, 0.0), age_h=1)
+    lo.outlet_count = 0
+    session.commit()
+
+    # Maximum: full-authority sources, >=10 distinct outlets (saturates the
+    # log1p velocity cap at exactly 1.0), orthogonal vector so novelty is
+    # unsuppressed by anything earlier.
+    hi = _story(session, outlets=[f"o{i}" for i in range(10)],
+                sources_authority=1.0, vec=(0.0, 1.0), age_h=1)
+
+    def _score(story):
+        parts = {
+            "authority": authority(session, story),
+            "velocity": velocity(story),
+            "novelty": novelty(session, story),
+            "entity": entity_weight(session, story),
+        }
+        return combine(parts, weights)
+
+    assert _score(lo) == pytest.approx(0.0)
+    assert _score(hi) == pytest.approx(1.0)

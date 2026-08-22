@@ -56,12 +56,24 @@ class ClusteringConfig(BaseModel):
 
 
 class ScoringConfig(BaseModel):
+    # entity is pinned to 0.0, not 0.15, DELIBERATELY: nothing in Phase 1
+    # populates the Entity/StoryEntity tables (feed.scoring.signals.
+    # entity_weight() always falls back to its 0.5 default), so a nonzero
+    # weight here would bake a constant into every story's score. combine()
+    # divides by the sum of these weights, so with entity at 0.0 the
+    # remaining three signals' denominator is 0.85 and the achievable score
+    # range is exactly [0, 1] -- not the [0.075, 0.925] a nonzero constant
+    # signal would compress it to. Phase 1's whole point is deriving
+    # absolute thresholds from this distribution, so that compression is
+    # not acceptable. Re-enable this weight in one line once something
+    # actually writes Entity/StoryEntity rows -- do not restore it before
+    # that, or the compression comes back silently.
     weights: dict[str, float] = Field(
         default_factory=lambda: {
             "authority": 0.25,
             "velocity": 0.40,
             "novelty": 0.20,
-            "entity": 0.15,
+            "entity": 0.0,
         }
     )
 
