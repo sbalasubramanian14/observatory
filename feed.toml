@@ -13,3 +13,11 @@ window_hours = 48
 cosine_weight = 0.6
 entity_weight = 0.4
 merge_threshold = 0.50
+
+# Per-model overrides: bge-small (GPU default) and MiniLM (CPU default) sit
+# on different similarity scales, so one global merge_threshold cannot serve
+# both. sentence-transformers/all-MiniLM-L6-v2's value below is the midpoint
+# of the safe threshold band measured by tests/golden/test_golden.py
+# (band low=0.30 high=0.40 width=0.10). See feed/config.py for details.
+[clustering.merge_thresholds]
+"sentence-transformers/all-MiniLM-L6-v2" = 0.35

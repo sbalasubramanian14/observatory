@@ -27,6 +27,17 @@ class ClusteringConfig(BaseModel):
     # similarity scales (measured: bge-small same-story minimum 0.695,
     # MiniLM 0.412). merge_threshold remains the fallback when a model id is
     # absent from this map (or when no model id is given).
+    #
+    # The pydantic-level default here stays an empty dict (see
+    # tests/test_config.py::test_merge_thresholds_defaults_to_empty_dict) --
+    # the actual production value for
+    # sentence-transformers/all-MiniLM-L6-v2 (the CPU default) lives in
+    # feed.toml's [clustering.merge_thresholds] table: 0.35, the midpoint of
+    # the safe threshold band measured by tests/golden/test_golden.py on the
+    # 22-item golden corpus with the 0.6*cosine + 0.4*entity_overlap blend --
+    # band observed as low=0.30 high=0.40 width=0.10 (>= MIN_BAND_WIDTH
+    # 0.06). Rerun that test and update feed.toml's value plus this comment
+    # if the corpus, weights, or model change.
     merge_thresholds: dict[str, float] = Field(default_factory=dict)
 
     @model_validator(mode="after")
