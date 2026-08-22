@@ -11,3 +11,15 @@ dist/
 .expo/
 .superpowers/
 *.egg-info/
+
+# web client (Phase 3)
+web/node_modules/
+web/.next/
+web/out/
+# local copy of the published bundle, synced from ../public via
+# web/scripts/sync-bundle.mjs — not committed, same as a CDN fetch target
+web/public/data/
+VERCEL-SETUP.md
+
+# Playwright MCP tool artifacts (snapshots/console logs from manual testing)
+.playwright-mcp/

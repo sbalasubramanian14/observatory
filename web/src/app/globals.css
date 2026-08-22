@@ -1,0 +1,260 @@
+/*
+ * Design tokens (spec §4.5 Theming).
+ *
+ * This file is the ONLY place a colour literal may appear. Every component
+ * consumes these as `var(--token-name)` — see eslint.config.mjs, which
+ * fails the build on a hex literal anywhere under src/app or
+ * src/components. Light values live on :root; dark values override the
+ * same names, either from the OS (`prefers-color-scheme`, guarded so an
+ * explicit light choice always wins) or from an explicit `data-theme`
+ * attribute set by ThemeProvider (src/lib/theme.tsx).
+ */
+
+:root {
+  /* surfaces */
+  --color-surface: #f7f5ef;
+  --color-surface-elevated: #ffffff;
+  --color-surface-sunken: #eeece2;
+  --color-overlay: rgba(25, 24, 20, 0.45);
+
+  /* text */
+  --color-text-primary: #1a1a22;
+  --color-text-secondary: #5c5d6b;
+  --color-text-tertiary: #8d8e9c;
+
+  /* structure */
+  --color-border: #e2ddd0;
+  --color-border-strong: #c9c2ac;
+
+  /* accent */
+  --color-accent: #2f4ed6;
+  --color-accent-strong: #23399e;
+  --color-accent-soft: #e7ebfc;
+  --color-accent-contrast: #ffffff;
+
+  /* semantic importance scale (heat, high -> low) */
+  --color-importance-high: #c2410c;
+  --color-importance-high-soft: #fbe6da;
+  --color-importance-medium: #b7791f;
+  --color-importance-medium-soft: #f8eed9;
+  --color-importance-low: #5f6373;
+  --color-importance-low-soft: #eceaf1;
+
+  /* semantic category accents */
+  --color-category-research: #2f4ed6;
+  --color-category-research-soft: #e7ebfc;
+  --color-category-default: #5f6373;
+  --color-category-default-soft: #ececef;
+
+  /* status */
+  --color-success: #15803d;
+  --color-success-soft: #e0f2e6;
+  --color-warning: #b7791f;
+  --color-warning-soft: #f8eed9;
+  --color-danger: #b91c1c;
+  --color-danger-soft: #fbe4e1;
+
+  --shadow-sm: 0 1px 2px rgba(30, 26, 14, 0.06);
+  --shadow-md: 0 6px 20px rgba(30, 26, 14, 0.09);
+  --shadow-focus: 0 0 0 3px var(--color-accent-soft);
+
+  /* type */
+  --font-serif: var(--font-newsreader), "Iowan Old Style", "Georgia", serif;
+  --font-sans: var(--font-inter), -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-jbmono), "SFMono-Regular", Consolas, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-md: 1.0625rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.55rem;
+  --text-2xl: 1.95rem;
+  --text-3xl: 2.5rem;
+
+  --leading-tight: 1.15;
+  --leading-snug: 1.35;
+  --leading-normal: 1.6;
+
+  /* space */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4.5rem;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+
+  --content-width: 780px;
+  --content-width-wide: 980px;
+}
+
+/* System dark mode, only when the reader hasn't made an explicit choice. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-surface: #131319;
+    --color-surface-elevated: #1c1c25;
+    --color-surface-sunken: #0e0e13;
+    --color-overlay: rgba(0, 0, 0, 0.6);
+
+    --color-text-primary: #edecf3;
+    --color-text-secondary: #a8a9ba;
+    --color-text-tertiary: #74768a;
+
+    --color-border: #2b2c38;
+    --color-border-strong: #3d3f4f;
+
+    --color-accent: #8b9dff;
+    --color-accent-strong: #aab8ff;
+    --color-accent-soft: #262c52;
+    --color-accent-contrast: #0e0e13;
+
+    --color-importance-high: #f2916f;
+    --color-importance-high-soft: #402318;
+    --color-importance-medium: #f0c264;
+    --color-importance-medium-soft: #3c3018;
+    --color-importance-low: #9a9cb0;
+    --color-importance-low-soft: #23242e;
+
+    --color-category-research: #8b9dff;
+    --color-category-research-soft: #262c52;
+    --color-category-default: #9a9cb0;
+    --color-category-default-soft: #23242e;
+
+    --color-success: #4ade80;
+    --color-success-soft: #17301f;
+    --color-warning: #f0c264;
+    --color-warning-soft: #3c3018;
+    --color-danger: #f38b83;
+    --color-danger-soft: #3d1e1c;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.45);
+    --shadow-focus: 0 0 0 3px var(--color-accent-soft);
+  }
+}
+
+/* Explicit user choice always wins, both directions. */
+:root[data-theme="dark"] {
+  --color-surface: #131319;
+  --color-surface-elevated: #1c1c25;
+  --color-surface-sunken: #0e0e13;
+  --color-overlay: rgba(0, 0, 0, 0.6);
+
+  --color-text-primary: #edecf3;
+  --color-text-secondary: #a8a9ba;
+  --color-text-tertiary: #74768a;
+
+  --color-border: #2b2c38;
+  --color-border-strong: #3d3f4f;
+
+  --color-accent: #8b9dff;
+  --color-accent-strong: #aab8ff;
+  --color-accent-soft: #262c52;
+  --color-accent-contrast: #0e0e13;
+
+  --color-importance-high: #f2916f;
+  --color-importance-high-soft: #402318;
+  --color-importance-medium: #f0c264;
+  --color-importance-medium-soft: #3c3018;
+  --color-importance-low: #9a9cb0;
+  --color-importance-low-soft: #23242e;
+
+  --color-category-research: #8b9dff;
+  --color-category-research-soft: #262c52;
+  --color-category-default: #9a9cb0;
+  --color-category-default-soft: #23242e;
+
+  --color-success: #4ade80;
+  --color-success-soft: #17301f;
+  --color-warning: #f0c264;
+  --color-warning-soft: #3c3018;
+  --color-danger: #f38b83;
+  --color-danger-soft: #3d1e1c;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-focus: 0 0 0 3px var(--color-accent-soft);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  line-height: var(--leading-tight);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font-family: inherit;
+}
+
+::selection {
+  background: var(--color-accent-soft);
+}
+
+a:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+  border-radius: var(--radius-sm);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
