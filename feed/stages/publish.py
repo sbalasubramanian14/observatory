@@ -73,6 +73,7 @@ def _story_detail_dict(story: Story) -> dict:
         "kind": story.kind,
         "category": story.category,
         "summary": story.summary,
+        "summary_provider": story.summary_provider,
         "analysis": story.analysis,
         "analysis_provider": story.analysis_provider,
         "score": story.score,

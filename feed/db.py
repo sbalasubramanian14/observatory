@@ -36,6 +36,10 @@ _STORY_NEW_COLUMNS: dict[str, str] = {
     "analysis_provider": "VARCHAR(128)",
     "analyzed_at": "DATETIME",
     "status": "VARCHAR(16)",
+    # Added for the multi-provider router (Tier 1 provenance, mirroring
+    # analysis_provider). Same additive-migration reasoning as above: an
+    # existing feed.db's `story` table predates this column.
+    "summary_provider": "VARCHAR(128)",
 }
 
 

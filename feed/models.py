@@ -125,6 +125,13 @@ class Story(Base):
     # is a hard requirement (spec 3.5: "Every analysis records the provider
     # and model that produced it").
     analysis_provider: Mapped[str | None] = mapped_column(String(128))
+    # Same provenance requirement as analysis_provider, but for the Tier 1
+    # (BULK, once-per-story) headline/summary/category call -- spec: "which
+    # provider AND model produced each summary/analysis". Set by
+    # feed.stages.enrich.enrich_tier1 from RouteResult, e.g.
+    # "groq:openai/gpt-oss-120b" or, on a Gemini 503 that failed over,
+    # "mistral:mistral-medium-latest".
+    summary_provider: Mapped[str | None] = mapped_column(String(128))
     analyzed_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
     status: Mapped[StoryStatus] = mapped_column(
         Enum(StoryStatus), default=StoryStatus.NEW, index=True
@@ -141,3 +148,33 @@ class StoryEntity(Base):
     __tablename__ = "story_entity"
     story_id: Mapped[int] = mapped_column(ForeignKey("story.id"), primary_key=True)
     entity_id: Mapped[int] = mapped_column(ForeignKey("entity.id"), primary_key=True)
+
+
+class ProviderStatus(Base):
+    """Per-provider, per-UTC-day quota/health record, persisted so it
+    survives restarts (requirement 2 of the multi-provider router task).
+    One row per (provider, day); feed.providers.health.ProviderHealthTracker
+    creates it lazily on first use each day. A brand-new table -- not new
+    columns on an existing one -- so plain create_all() is enough to add it
+    to an already-populated feed.db; no entry in feed.db._STORY_NEW_COLUMNS
+    is needed.
+    """
+    __tablename__ = "provider_status"
+    __table_args__ = (
+        UniqueConstraint("provider", "day", name="uq_provider_status_provider_day"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), index=True)
+    day: Mapped[str] = mapped_column(String(10))  # "YYYY-MM-DD", UTC
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    successes: Mapped[int] = mapped_column(Integer, default=0)
+    failures: Mapped[int] = mapped_column(Integer, default=0)
+    # Consecutive 429s only -- reset to 0 by any success OR any non-429
+    # failure. This is what "repeated 429s ... skipped for the remainder
+    # of the day" (requirement 2) is measured against, distinct from
+    # `failures`, which counts every kind of failure.
+    consecutive_429: Mapped[int] = mapped_column(Integer, default=0)
+    disabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    disabled_reason: Mapped[str | None] = mapped_column(String(256))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_used_at: Mapped[datetime | None] = mapped_column(UtcDateTime)

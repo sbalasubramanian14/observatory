@@ -32,6 +32,7 @@ class StoryDetail(_Strict):
     kind: str | None = None
     category: str | None = None
     summary: str | None = None
+    summary_provider: str | None = None
     analysis: str | None = None
     analysis_provider: str | None = None
     score: float | None = None

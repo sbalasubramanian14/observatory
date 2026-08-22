@@ -94,6 +94,77 @@ def test_providers_daily_budget_must_be_positive(tmp_path):
         load_config(p)
 
 
+# --- BulkProviderConfig / multi-provider failover chain --------------------
+
+def test_bulk_defaults_to_empty_list(tmp_path):
+    """Matches the existing merge_thresholds convention: the pydantic-level
+    default is empty, and the real chain lives in feed.toml."""
+    cfg = load_config(tmp_path / "missing.toml")
+    assert cfg.providers.bulk == []
+    assert cfg.providers.max_retries == 2
+    assert cfg.providers.backoff_base == 0.5
+    assert cfg.providers.rate_limit_disable_threshold == 3
+
+
+def test_bulk_chain_is_parsed_in_priority_order(tmp_path):
+    p = tmp_path / "feed.toml"
+    p.write_text(
+        """
+[[providers.bulk]]
+name = "groq"
+kind = "openai_compatible"
+model = "openai/gpt-oss-120b"
+base_url = "https://api.groq.com/openai/v1"
+env_var = "GROQ_API_KEY"
+
+[[providers.bulk]]
+name = "gemini"
+kind = "gemini"
+model = "gemini-flash-latest"
+env_var = "GEMINI_API_KEY"
+enabled = false
+""",
+        encoding="utf-8",
+    )
+    cfg = load_config(p)
+
+    assert [e.name for e in cfg.providers.bulk] == ["groq", "gemini"]
+    assert cfg.providers.bulk[0].enabled is True
+    assert cfg.providers.bulk[0].base_url == "https://api.groq.com/openai/v1"
+    assert cfg.providers.bulk[1].enabled is False
+    assert cfg.providers.bulk[1].base_url is None
+
+
+def test_openai_compatible_entry_requires_base_url(tmp_path):
+    p = tmp_path / "feed.toml"
+    p.write_text(
+        '[[providers.bulk]]\nname = "groq"\nkind = "openai_compatible"\n'
+        'model = "m"\nenv_var = "GROQ_API_KEY"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        load_config(p)
+
+
+def test_shipped_feed_toml_configures_the_expected_bulk_chain():
+    """The real feed.toml this project ships -- not a tmp_path fixture --
+    must define the live-tested chain in priority order, with Cerebras
+    disabled by default (measured 402 Payment Required)."""
+    cfg = load_config(Path("feed.toml"))
+
+    names = [e.name for e in cfg.providers.bulk]
+    assert names == ["groq", "mistral", "openrouter", "gemini", "cerebras"]
+
+    by_name = {e.name: e for e in cfg.providers.bulk}
+    assert by_name["cerebras"].enabled is False
+    for name in ("groq", "mistral", "openrouter", "gemini"):
+        assert by_name[name].enabled is True
+    assert by_name["gemini"].kind == "gemini"
+    for name in ("groq", "mistral", "openrouter", "cerebras"):
+        assert by_name[name].kind == "openai_compatible"
+        assert by_name[name].base_url is not None
+
+
 def test_publish_defaults(tmp_path):
     cfg = load_config(tmp_path / "missing.toml")
     assert cfg.publish.out_dir == "public"

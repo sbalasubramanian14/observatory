@@ -3,17 +3,22 @@ import argparse
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 from sqlalchemy import func, select
 import feed.sources  # noqa: F401  (registers plugins)
 from feed.clustering.adjudicate import NullAdjudicator, ThresholdAdjudicator
-from feed.config import Config, load_config
+from feed.config import BulkProviderConfig, Config, load_config
 from feed.db import create_all, make_engine, make_session_factory
 from feed.embedding import build_embedder
 from feed.embedding.resolve import resolve
 from feed.models import Item, Source, Stage, Story
+from feed.providers.base import Provider, ProviderError
 from feed.providers.claude_code import ClaudeCodeProvider
+from feed.providers.failover import FailoverProvider
 from feed.providers.gemini import GeminiProvider
+from feed.providers.health import ProviderHealthTracker
+from feed.providers.openai_compatible import OpenAICompatibleProvider
 from feed.providers.router import Router
 from feed.sources.registry import known_plugins
 from feed.stages.base import DEFAULT_MAX_ROUNDS, drain
@@ -52,15 +57,51 @@ def _build_adjudicator(cfg: Config) -> NullAdjudicator:
     )
 
 
-def _build_router(cfg: Config) -> Router:
-    """Wire the spec 3.5 provider router: Gemini as BULK, Claude Code as
-    DEEP. Building this never itself fails on a missing GEMINI_API_KEY --
-    that surfaces per-story as a ProviderError, isolated by enrich stage's
-    own failure handling, not as a crash here. Kept out of `_session()`'s
-    call path entirely so a plain `feed run` (no --enrich) never even
-    imports/constructs a provider.
+def _build_bulk_provider(entry: BulkProviderConfig, *, max_retries: int,
+                         backoff_base: float) -> Provider:
+    """One [[providers.bulk]] entry -> one live Provider instance. Model
+    name, base URL, and env var all come from feed.toml (never hardcoded
+    here) -- see BulkProviderConfig's docstring for why that matters.
     """
-    bulk = GeminiProvider(model=cfg.providers.gemini_model, timeout=cfg.providers.gemini_timeout)
+    if entry.kind == "gemini":
+        return GeminiProvider(model=entry.model, timeout=entry.timeout,
+                              max_retries=max_retries, backoff_base=backoff_base)
+    return OpenAICompatibleProvider(
+        name=entry.name, model=entry.model, base_url=entry.base_url,
+        env_var=entry.env_var, timeout=entry.timeout,
+        max_retries=max_retries, backoff_base=backoff_base,
+    )
+
+
+def _build_router(cfg: Config) -> Router:
+    """Wire the spec 3.5 provider router: a priority-ordered, failing-over
+    BULK chain (requirement 1) as BULK, Claude Code as DEEP. Building this
+    never itself fails on a missing API key -- that surfaces per-story as a
+    ProviderError, isolated by enrich stage's own failure handling, not as
+    a crash here. Kept out of `_session()`'s call path entirely so a plain
+    `feed run` (no --enrich) never even imports/constructs a provider.
+
+    Only ENABLED entries (cfg.providers.bulk[*].enabled) join the chain --
+    Cerebras ships disabled by default (measured 402 "Payment required").
+    A bare feed.toml with no [[providers.bulk]] entries at all falls back
+    to a single Gemini provider, preserving this function's behaviour
+    before this task existed.
+    """
+    entries = [e for e in cfg.providers.bulk if e.enabled]
+    if entries:
+        providers = [
+            _build_bulk_provider(e, max_retries=cfg.providers.max_retries,
+                                 backoff_base=cfg.providers.backoff_base)
+            for e in entries
+        ]
+        engine = make_engine(cfg.database.url)
+        create_all(engine)  # provider_status is a new table; must exist
+        bulk: Provider = FailoverProvider(
+            providers, session_factory=make_session_factory(engine),
+            rate_limit_disable_threshold=cfg.providers.rate_limit_disable_threshold,
+        )
+    else:
+        bulk = GeminiProvider(model=cfg.providers.gemini_model, timeout=cfg.providers.gemini_timeout)
     deep = ClaudeCodeProvider(timeout=cfg.providers.claude_code_timeout)
     return Router(bulk=bulk, deep=deep)
 
@@ -172,6 +213,62 @@ def cmd_enrich(args, cfg: Config) -> int:
     return 0
 
 
+def cmd_providers(args, cfg: Config) -> int:
+    """Requirement 6: probe each configured provider and print enabled /
+    reachable / model / latency / today's usage -- "how the user diagnoses
+    'why is nothing being summarized'." Makes one real, cheap completion
+    call per enabled provider (this command exists specifically to answer
+    "is the network path to this provider actually working right now",
+    which a stubbed health() check cannot answer), so it is never exercised
+    against real providers in the default test suite -- see
+    tests/test_cli_providers.py, which monkeypatches _build_bulk_provider.
+    """
+    engine = make_engine(cfg.database.url)
+    create_all(engine)
+    session_factory = make_session_factory(engine)
+
+    header = f"{'provider':<12}{'kind':<18}{'enabled':<9}{'reachable':<22}{'model':<42}{'latency':<10}today"
+    print(header)
+    for entry in cfg.providers.bulk:
+        provider = _build_bulk_provider(
+            entry, max_retries=cfg.providers.max_retries,
+            backoff_base=cfg.providers.backoff_base,
+        )
+        with session_factory() as s:
+            tracker = ProviderHealthTracker(
+                s, rate_limit_disable_threshold=cfg.providers.rate_limit_disable_threshold,
+            )
+            status = tracker.status_today(entry.name)
+            usage = f"{status.successes}ok/{status.failures}fail"
+            if status.disabled:
+                usage += f" DISABLED ({status.disabled_reason})"
+
+        reachable, latency = "n/a (disabled)", "n/a"
+        if entry.enabled:
+            h = provider.health()
+            if not h.healthy:
+                reachable, latency = f"no ({h.detail})", "n/a"
+            else:
+                start = time.monotonic()
+                try:
+                    provider.complete("Reply with only the single word: OK.")
+                    latency = f"{(time.monotonic() - start) * 1000:.0f}ms"
+                    reachable = "yes"
+                except ProviderError as exc:
+                    reachable = f"no ({exc})"
+        print(f"{entry.name:<12}{entry.kind:<18}{str(entry.enabled):<9}"
+              f"{reachable:<22}{entry.model:<42}{latency:<10}{usage}")
+
+    # Claude Code (DEEP, spec 3.5) is local, not part of the BULK failover
+    # chain, and its health() is deliberately optimistic (no cheap
+    # network/subprocess probe exists that doesn't itself cost a call) --
+    # see feed/providers/claude_code.py. Listed for completeness, not probed.
+    deep = ClaudeCodeProvider(timeout=cfg.providers.claude_code_timeout)
+    print(f"{'claude-code':<12}{'local-cli':<18}{'True':<9}"
+          f"{'n/a (local CLI)':<22}{deep.model:<42}{'n/a':<10}n/a")
+    return 0
+
+
 def cmd_publish(args, cfg: Config) -> int:
     _, factory = _session(cfg)
     out_dir = args.out or cfg.publish.out_dir
@@ -225,6 +322,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     enrich_p = sub.add_parser("enrich")
     enrich_p.set_defaults(func=cmd_enrich)
+
+    sub.add_parser("providers").set_defaults(func=cmd_providers)
 
     publish_p = sub.add_parser("publish")
     publish_p.add_argument("--out", type=Path, default=None,

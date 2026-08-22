@@ -132,6 +132,11 @@ def enrich_tier1(session: Session, router: Router, cfg: ProvidersConfig,
                 story.title = headline
             story.summary = summary or None
             story.category = category
+            # Provenance requirement: "which provider AND model produced
+            # each summary/analysis" -- analysis already recorded this via
+            # analysis_provider (tier 2); summary_provider is the same idea
+            # for tier 1.
+            story.summary_provider = f"{route.provider}:{route.model}"
             story.status = StoryStatus.ENRICHED
             session.commit()
             result.tier1_processed += 1

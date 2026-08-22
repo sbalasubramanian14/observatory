@@ -69,6 +69,31 @@ def _block_real_claude_cli(monkeypatch):
     monkeypatch.setattr("feed.providers.claude_code._run_cli", _boom)
 
 
+@pytest.fixture(autouse=True)
+def _block_real_openai_compatible_network(monkeypatch):
+    """Same guard, for feed.providers.openai_compatible.OpenAICompatibleProvider
+    (Groq/Mistral/OpenRouter/Cerebras all go through this one class)."""
+    def _boom(*args, **kwargs):
+        raise AssertionError(
+            "real network call (feed.providers.openai_compatible._post) "
+            "attempted during a test; monkeypatch "
+            "feed.providers.openai_compatible._post instead"
+        )
+
+    monkeypatch.setattr("feed.providers.openai_compatible._post", _boom)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_retry_sleep(monkeypatch):
+    """feed.providers._retry.call_with_retry() backs off with a real
+    time.sleep() between attempts in production. Left un-mocked, a test
+    exercising a couple of retries would genuinely sleep for
+    backoff_base*(2**attempt) seconds each time -- this makes every such
+    test instant without needing each test to remember to patch it.
+    """
+    monkeypatch.setattr("feed.providers._retry._sleep", lambda seconds: None)
+
+
 @pytest.fixture
 def session() -> Session:
     engine = make_engine("sqlite://")   # in-memory

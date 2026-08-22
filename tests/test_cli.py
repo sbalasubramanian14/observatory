@@ -350,3 +350,137 @@ def test_full_run_produces_scored_stories(tmp_path, capsys):
     main(["--config", str(cfg), "stats"])
     out = capsys.readouterr().out
     assert "stories" in out
+
+
+# --- multi-provider BULK failover chain (_build_router / `feed providers`) -
+
+def _cfg_with_bulk_chain(tmp_path, *, cerebras_enabled=False) -> Path:
+    p = tmp_path / "feed.toml"
+    p.write_text(
+        f'[database]\nurl = "sqlite:///{(tmp_path / "t.db").as_posix()}"\n'
+        '[embedding]\nbackend = "onnx"\n'
+        'model = "sentence-transformers/all-MiniLM-L6-v2"\n'
+        'device = "cpu"\nbatch_size = 8\n'
+        '[[providers.bulk]]\n'
+        'name = "groq"\nkind = "openai_compatible"\nmodel = "openai/gpt-oss-120b"\n'
+        'base_url = "https://api.groq.com/openai/v1"\nenv_var = "GROQ_API_KEY_TEST"\n'
+        '[[providers.bulk]]\n'
+        'name = "gemini"\nkind = "gemini"\nmodel = "gemini-flash-latest"\n'
+        'env_var = "GEMINI_API_KEY_TEST"\n'
+        '[[providers.bulk]]\n'
+        'name = "cerebras"\nkind = "openai_compatible"\nmodel = "gpt-oss-120b"\n'
+        'base_url = "https://api.cerebras.ai/v1"\nenv_var = "CEREBRAS_API_KEY_TEST"\n'
+        f'enabled = {"true" if cerebras_enabled else "false"}\n',
+        encoding="utf-8",
+    )
+    return p
+
+
+def test_build_router_wires_only_enabled_bulk_entries_in_priority_order(tmp_path):
+    from feed.cli import _build_router
+    from feed.config import load_config
+    from feed.providers.failover import FailoverProvider
+
+    cfg = load_config(_cfg_with_bulk_chain(tmp_path))
+    router = _build_router(cfg)
+
+    assert isinstance(router.bulk, FailoverProvider)
+    names = [p.name for p in router.bulk._providers]
+    assert names == ["groq", "gemini"]  # cerebras excluded: disabled by default
+
+
+def test_build_router_falls_back_to_single_gemini_when_no_bulk_configured(tmp_path):
+    from feed.cli import _build_router
+    from feed.config import load_config
+    from feed.providers.gemini import GeminiProvider
+
+    cfg = load_config(_cfg(tmp_path))  # no [[providers.bulk]] at all
+    router = _build_router(cfg)
+
+    assert isinstance(router.bulk, GeminiProvider)
+
+
+def test_cmd_providers_probes_each_configured_provider(tmp_path, capsys, monkeypatch):
+    """Requirement 6: `feed providers` prints enabled / reachable / model /
+    latency / today's usage per provider, without ever making a real
+    network call in this test -- _build_bulk_provider is monkeypatched to
+    return stub providers instead.
+    """
+    import feed.cli as cli_module
+    from feed.providers.base import ProviderError, ProviderHealth
+
+    class _Stub:
+        def __init__(self, name, model, *, healthy=True, fails=False):
+            self.name = name
+            self.model = model
+            self._healthy = healthy
+            self._fails = fails
+
+        def complete(self, prompt, *, schema=None):
+            if self._fails:
+                raise ProviderError(f"{self.name}: boom")
+            return "OK"
+
+        def health(self):
+            return ProviderHealth(healthy=self._healthy)
+
+    def _fake_build(entry, *, max_retries, backoff_base):
+        if entry.name == "gemini":
+            return _Stub("gemini", entry.model, fails=True)
+        return _Stub(entry.name, entry.model)
+
+    monkeypatch.setattr(cli_module, "_build_bulk_provider", _fake_build)
+
+    cfg = _cfg_with_bulk_chain(tmp_path, cerebras_enabled=True)
+    main(["--config", str(cfg), "init"])
+
+    rc = main(["--config", str(cfg), "providers"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "groq" in out and "yes" in out  # reachable
+    assert "gemini" in out and "boom" in out  # reachable=no, error shown
+    assert "cerebras" in out
+    assert "claude-code" in out  # DEEP provider listed too
+
+
+def test_enrich_stores_provenance_via_the_real_failover_chain(tmp_path, monkeypatch):
+    """End-to-end (short of the network): the real FailoverProvider, the
+    real Router, and the real enrich_tier1 all wired together the way
+    `feed enrich` wires them, with only the two providers' network seams
+    monkeypatched -- proves requirement 4 (provenance) survives the whole
+    stack, not just the FailoverProvider unit tests.
+    """
+    import json
+    from feed.cli import _build_router
+    from feed.config import load_config
+    from feed.db import make_engine, make_session_factory
+    from feed.providers.base import Tier
+    from feed.stages.enrich import enrich_tier1
+
+    monkeypatch.delenv("GROQ_API_KEY_TEST", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY_TEST", "k")
+
+    cfg_path = _cfg_with_bulk_chain(tmp_path)
+    main(["--config", str(cfg_path), "init"])
+    _seed_scored_story(cfg_path, score=0.9)
+    cfg = load_config(cfg_path)
+
+    tier1_json = json.dumps({"headline": "H", "summary": "S", "category": "research"})
+
+    def fake_gemini_post(url, *, headers, json_body, timeout):
+        return {"candidates": [{"content": {"parts": [{"text": tier1_json}]}}]}
+
+    monkeypatch.setattr("feed.providers.gemini._post", fake_gemini_post)
+
+    router = _build_router(cfg)
+    # groq has no API key set (GROQ_API_KEY_TEST unset above) -- it must be
+    # skipped with a clear reason, and gemini must serve the request.
+    engine = make_engine(cfg.database.url)
+    factory = make_session_factory(engine)
+    with factory() as s:
+        result = enrich_tier1(s, router, cfg.providers)
+        assert result.tier1_processed == 1
+        from feed.models import Story
+        story = s.query(Story).first()
+        assert story.summary_provider == "gemini:gemini-flash-latest"

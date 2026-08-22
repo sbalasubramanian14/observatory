@@ -78,12 +78,62 @@ class ScoringConfig(BaseModel):
     )
 
 
-class ProvidersConfig(BaseModel):
-    """Spec 3.5 LLM tiering. Gemini is the BULK provider (Tier 1, once per
-    story); Claude Code is the DEEP provider (Tier 2, budgeted). Neither
-    section carries a secret -- the Gemini key comes from the environment /
-    .env, never from feed.toml, so this config is safe to commit.
+class BulkProviderConfig(BaseModel):
+    """One entry in the BULK (Tier 1) failover chain -- priority is simply
+    list order in feed.toml's [[providers.bulk]] array. Model names, base
+    URLs, and env var names all live here rather than hardcoded in
+    provider classes: stale model names broke this project three separate
+    times in one day (a dead gemini-2.0-flash, a Cerebras model that does
+    not exist, two OpenRouter model names that 404'd), and a config value
+    is a one-line fix where a hardcoded constant is a code change.
     """
+    name: str
+    kind: Literal["openai_compatible", "gemini"]
+    model: str
+    # Required for kind="openai_compatible" (feed.providers.openai_compatible.
+    # OpenAICompatibleProvider needs it); unused for kind="gemini", which
+    # has its endpoint baked into feed.providers.gemini.ENDPOINT.
+    base_url: str | None = None
+    env_var: str
+    enabled: bool = True
+    timeout: float = Field(default=30.0, gt=0)
+
+    @model_validator(mode="after")
+    def base_url_required_for_openai_compatible(self) -> "BulkProviderConfig":
+        if self.kind == "openai_compatible" and not self.base_url:
+            raise ValueError(
+                f"providers.bulk[{self.name!r}]: base_url is required for "
+                "kind='openai_compatible'"
+            )
+        return self
+
+
+class ProvidersConfig(BaseModel):
+    """Spec 3.5 LLM tiering, extended with multi-provider BULK failover.
+    BULK (Tier 1, once per story) tries `bulk` in priority order with
+    automatic failover (see feed.providers.failover.FailoverProvider);
+    Claude Code remains the single DEEP provider (Tier 2, budgeted). No
+    section carries a secret -- every provider's key comes from the
+    environment / .env via its own `env_var`, never from feed.toml, so
+    this config is safe to commit.
+    """
+    # Pydantic-level default is deliberately an empty list, matching the
+    # existing convention for clustering.merge_thresholds: the real chain
+    # -- Groq, Mistral, OpenRouter, Gemini, and a disabled-by-default
+    # Cerebras -- lives in feed.toml's [[providers.bulk]] tables, not here.
+    bulk: list[BulkProviderConfig] = Field(default_factory=list)
+    # Bounded retry-with-backoff (requirement 5) applied inside each
+    # provider's own complete() before the failover chain advances.
+    max_retries: int = Field(default=2, ge=0)
+    backoff_base: float = Field(default=0.5, gt=0)
+    # Requirement 2: consecutive 429s before a provider is skipped for the
+    # rest of the UTC day. A single 402 always disables immediately,
+    # regardless of this value.
+    rate_limit_disable_threshold: int = Field(default=3, gt=0)
+    # Retained for backward compatibility (existing tests / a bare feed.toml
+    # with no [[providers.bulk]] entries); _build_router in feed/cli.py no
+    # longer reads these when `bulk` is populated -- Gemini's model/timeout
+    # then come from its own BulkProviderConfig entry instead.
     gemini_model: str = "gemini-flash-latest"
     gemini_timeout: float = Field(default=30.0, gt=0)
     claude_code_timeout: float = Field(default=120.0, gt=0)

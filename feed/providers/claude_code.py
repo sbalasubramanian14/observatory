@@ -1,6 +1,7 @@
 from __future__ import annotations
 import subprocess
 from feed.providers.base import ProviderError, ProviderHealth, Tier
+from feed.providers.reasoning import strip_reasoning
 
 
 def _run_cli(args: list[str], *, timeout: float) -> subprocess.CompletedProcess:
@@ -40,6 +41,11 @@ class ClaudeCodeProvider:
         text = (proc.stdout or "").strip()
         if not text:
             raise ProviderError("claude-code: empty output")
+        # Spec requirement 3: strip reasoning blocks unconditionally --
+        # "any model may do this", not just the OpenAI-compatible chain.
+        text = strip_reasoning(text)
+        if not text:
+            raise ProviderError("claude-code: output was only reasoning content")
         return text
 
     def health(self) -> ProviderHealth:

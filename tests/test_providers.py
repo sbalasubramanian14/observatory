@@ -1,9 +1,23 @@
 import subprocess
+import httpx
 import pytest
-from feed.providers.base import ProviderError, ProviderHealth, Tier
+from feed.providers.base import (
+    PaymentRequiredError,
+    ProviderError,
+    ProviderHealth,
+    RateLimitError,
+    Tier,
+    TransientProviderError,
+)
 from feed.providers.claude_code import ClaudeCodeProvider
 from feed.providers.gemini import GeminiProvider
 from feed.providers.router import RouteResult, Router
+
+
+def _http_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://example.test")
+    response = httpx.Response(status_code, json={}, request=request)
+    return httpx.HTTPStatusError(str(status_code), request=request, response=response)
 
 
 # --- GeminiProvider -----------------------------------------------------
@@ -95,6 +109,70 @@ def test_gemini_dotenv_is_used_when_no_real_env_var(monkeypatch, tmp_path):
     assert provider.api_key == "from-dotenv"
 
 
+def test_gemini_429_raises_rate_limit_error(monkeypatch):
+    def fake_post(*a, **k):
+        raise _http_error(429)
+
+    monkeypatch.setattr("feed.providers.gemini._post", fake_post)
+    provider = GeminiProvider(api_key="k")
+
+    with pytest.raises(RateLimitError):
+        provider.complete("hi")
+
+
+def test_gemini_402_raises_payment_required_error(monkeypatch):
+    def fake_post(*a, **k):
+        raise _http_error(402)
+
+    monkeypatch.setattr("feed.providers.gemini._post", fake_post)
+    provider = GeminiProvider(api_key="k")
+
+    with pytest.raises(PaymentRequiredError):
+        provider.complete("hi")
+
+
+def test_gemini_503_is_transient_and_retried_before_failing(monkeypatch):
+    """Live-measured behaviour this task exists to fix: Gemini returned 503
+    on 3 of 4 attempts. A single 503 must not immediately burn the story's
+    attempt -- it gets a bounded retry first."""
+    calls = {"n": 0}
+
+    def fake_post(*a, **k):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise _http_error(503)
+        return {"candidates": [{"content": {"parts": [{"text": "recovered"}]}}]}
+
+    monkeypatch.setattr("feed.providers.gemini._post", fake_post)
+    provider = GeminiProvider(api_key="k", max_retries=2)
+
+    assert provider.complete("hi") == "recovered"
+    assert calls["n"] == 2
+
+
+def test_gemini_503_eventually_raises_transient_error_when_retries_exhausted(monkeypatch):
+    def fake_post(*a, **k):
+        raise _http_error(503)
+
+    monkeypatch.setattr("feed.providers.gemini._post", fake_post)
+    provider = GeminiProvider(api_key="k", max_retries=1)
+
+    with pytest.raises(TransientProviderError):
+        provider.complete("hi")
+
+
+def test_gemini_strips_reasoning_before_returning(monkeypatch):
+    def fake_post(*a, **k):
+        return {"candidates": [{"content": {"parts": [
+            {"text": "<think>internal chatter</think>the real answer"}
+        ]}}]}
+
+    monkeypatch.setattr("feed.providers.gemini._post", fake_post)
+    provider = GeminiProvider(api_key="k")
+
+    assert provider.complete("hi") == "the real answer"
+
+
 # --- ClaudeCodeProvider ---------------------------------------------------
 
 def test_claude_code_complete_returns_stripped_stdout(monkeypatch):
@@ -139,6 +217,18 @@ def test_claude_code_empty_output_is_a_provider_error(monkeypatch):
 
     with pytest.raises(ProviderError):
         provider.complete("hi")
+
+
+def test_claude_code_strips_reasoning_before_returning(monkeypatch):
+    def fake_run(args, *, timeout):
+        return subprocess.CompletedProcess(
+            args, 0, stdout="<think>mulling it over</think>the actual analysis", stderr="",
+        )
+
+    monkeypatch.setattr("feed.providers.claude_code._run_cli", fake_run)
+    provider = ClaudeCodeProvider()
+
+    assert provider.complete("hi") == "the actual analysis"
 
 
 # --- Router ---------------------------------------------------------------

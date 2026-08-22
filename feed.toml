@@ -32,19 +32,79 @@ merge_threshold = 0.50
 [clustering.merge_thresholds]
 "sentence-transformers/all-MiniLM-L6-v2" = 0.35
 
-# Spec 3.5 LLM tiering. No secrets here -- GEMINI_API_KEY comes from the
-# environment / gitignored .env, never from this file. gemini-flash-latest
-# is used deliberately over a pinned version (e.g. gemini-2.0-flash, which
-# is now dead) so a future model retirement doesn't silently break Tier 1.
+# Spec 3.5 LLM tiering. No secrets here -- every provider's key comes from
+# the environment / gitignored .env via its own env_var below, never from
+# this file.
 [providers]
-gemini_model = "gemini-flash-latest"
-gemini_timeout = 30.0
 claude_code_timeout = 120.0
 # Placeholder starting points per spec open questions 6/9.2 -- both need
 # tuning once a live score distribution and observed Claude Code rate
 # limits exist.
 tier2_score_cut = 0.6
 daily_budget = 20
+# Bounded retry-with-backoff for transient (5xx/timeout/connection) errors
+# before the failover chain advances to the next provider.
+max_retries = 2
+backoff_base = 0.5
+# Consecutive 429s (not total) before a provider is skipped for the rest
+# of the UTC day. A single 402 always disables immediately.
+rate_limit_disable_threshold = 3
+
+# BULK (Tier 1) failover chain -- priority is list order. Live-tested
+# 2026-08-22 (measured, not from documentation or training data, both of
+# which were wrong three times that day): Groq/Mistral/OpenRouter all 200
+# OK; Gemini 503 on 3 of 4 attempts (kept, lower priority, as a fallback
+# rather than removed); Cerebras 402 "Payment required" (implemented but
+# disabled by default -- flip `enabled` once the account has credit).
+[[providers.bulk]]
+name = "groq"
+kind = "openai_compatible"
+model = "openai/gpt-oss-120b"
+base_url = "https://api.groq.com/openai/v1"
+env_var = "GROQ_API_KEY"
+enabled = true
+timeout = 30.0
+
+[[providers.bulk]]
+name = "mistral"
+kind = "openai_compatible"
+model = "mistral-medium-latest"
+base_url = "https://api.mistral.ai/v1"
+env_var = "MISTRAL_API_KEY"
+enabled = true
+timeout = 30.0
+
+[[providers.bulk]]
+name = "openrouter"
+kind = "openai_compatible"
+model = "nvidia/nemotron-3-ultra-550b-a55b:free"
+base_url = "https://openrouter.ai/api/v1"
+env_var = "OPENROUTER_API_KEY"
+enabled = true
+timeout = 30.0
+
+[[providers.bulk]]
+name = "gemini"
+kind = "gemini"
+# gemini-flash-latest is used deliberately over a pinned version (e.g.
+# gemini-2.0-flash, which is now dead) so a future model retirement
+# doesn't silently break this fallback rung.
+model = "gemini-flash-latest"
+env_var = "GEMINI_API_KEY"
+enabled = true
+timeout = 30.0
+
+[[providers.bulk]]
+name = "cerebras"
+kind = "openai_compatible"
+model = "gpt-oss-120b"
+base_url = "https://api.cerebras.ai/v1"
+env_var = "CEREBRAS_API_KEY"
+# Measured 402 "Payment required" on 2026-08-22 -- disabled until the
+# account has credit. Left configured (not deleted) so re-enabling is a
+# one-line flip, not a rewrite.
+enabled = false
+timeout = 30.0
 
 # Spec 4.1/4.4: the static bundle the Publish stage writes.
 [publish]

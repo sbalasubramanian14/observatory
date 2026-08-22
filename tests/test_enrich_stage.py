@@ -72,6 +72,10 @@ def test_tier1_enriches_a_new_scored_story(session):
     assert story.summary == "Two sentence summary."
     assert story.category == "research"
     assert story.status is StoryStatus.ENRICHED
+    # Provenance requirement: "which provider AND model produced each
+    # summary/analysis" -- tier 1's half of that (tier 2's is covered by
+    # the analysis_provider assertions further down this file).
+    assert story.summary_provider == "gemini:gemini-flash-latest"
 
 
 def test_tier1_ignores_unscored_stories(session):
