@@ -14,8 +14,14 @@ const source = path.join(repoRoot, "public");
 const dest = path.join(__dirname, "..", "public", "data");
 
 if (!existsSync(source)) {
-  console.error(`Bundle source not found at ${source}`);
-  process.exit(1);
+  // Not fatal: this is a local dev convenience only. In production the
+  // client fetches the published bundle at runtime (spec §4.5) and never
+  // needs a local copy — most visibly on Vercel, where the repo root's
+  // public/ is gitignored and simply doesn't exist. Failing the build over
+  // its absence would be exactly the "bake data in at build time" mistake
+  // spec §4.5 rules out.
+  console.warn(`Bundle source not found at ${source} — skipping local sync (this is fine in CI/Vercel).`);
+  process.exit(0);
 }
 
 await rm(dest, { recursive: true, force: true });
