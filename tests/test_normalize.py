@@ -20,19 +20,9 @@ def _seed(session, **kw):
     return item
 
 
-@pytest.fixture(autouse=True)
-def _block_real_network(monkeypatch):
-    """Safety net: fail loudly if anything in this file reaches the real
-    trafilatura.fetch_url, regardless of which code path got there.
-
-    This is in addition to (not instead of) the module-level seam
-    (`_fetch_remote_text`) that production code and targeted tests use to
-    avoid the network path entirely.
-    """
-    def _boom(*args, **kwargs):
-        raise AssertionError("real network fetch (trafilatura.fetch_url) attempted in a test")
-
-    monkeypatch.setattr("trafilatura.fetch_url", _boom)
+# Network-blocking safety net now lives suite-wide in tests/conftest.py
+# (_block_real_network, autouse) so every test file is covered, not just
+# this one. See that fixture's docstring for the rationale.
 
 
 def test_content_hash_ignores_whitespace_differences():
@@ -79,14 +69,26 @@ def test_item_with_no_usable_text_fails_cleanly(session):
 
 
 def test_dedup_lookup_excludes_the_item_itself(session):
-    # A freshly-normalized item must not be treated as a duplicate of
-    # itself when Item.content_hash == Item.content_hash trivially matches
-    # its own row -- the lookup must exclude Item.id == item.id.
+    # A freshly-seeded item has content_hash == NULL, so re-normalizing it
+    # once can never self-match on content regardless of whether the
+    # Item.id != item.id filter is present -- that setup can't actually
+    # exercise the filter. To reach the condition the filter guards
+    # against, seed an item whose content_hash is ALREADY populated in the
+    # DB (as if it were previously normalized, e.g. re-processed after a
+    # partial failure), then normalize it again. Without
+    # `Item.id != item.id` in the lookup, the query finds the item's own
+    # row (same content_hash, same id) and wrongly raises
+    # DuplicateContent; with the filter, it excludes its own row and
+    # proceeds normally.
     item = _seed(session)
-    normalize_item(session, item)
+    digest = content_hash("An abstract with real words.")
+    item.content_hash = digest
+    item.text = "An abstract with real words."
     session.commit()
-    assert item.stage != Stage.FAILED
-    assert item.content_hash is not None
+
+    normalize_item(session, item)  # must NOT raise DuplicateContent
+    session.commit()
+    assert item.content_hash == digest
 
 
 def test_arxiv_item_with_empty_summary_fails_without_reaching_fetch_seam(session, monkeypatch):
