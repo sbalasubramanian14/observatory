@@ -23,3 +23,5 @@ VERCEL-SETUP.md
 
 # Playwright MCP tool artifacts (snapshots/console logs from manual testing)
 .playwright-mcp/
+public/
+.playwright-mcp/
