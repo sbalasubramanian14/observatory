@@ -13,6 +13,7 @@ from feed.embedding import build_embedder
 from feed.embedding.resolve import resolve
 from feed.models import Item, Source, Stage, Story
 from feed.sources.registry import known_plugins
+from feed.stages.base import DEFAULT_MAX_ROUNDS, drain
 from feed.stages.cluster import cluster
 from feed.stages.collect import collect
 from feed.stages.embed import embed
@@ -81,6 +82,19 @@ def cmd_sources_list(args, cfg: Config) -> int:
 
 
 def cmd_run(args, cfg: Config) -> int:
+    """Run one full pipeline pass: collect, then drain normalize/embed/
+    cluster/score to completion.
+
+    I1 fix: each of those four stages claims a fixed-size batch per call
+    (normalize=100, embed=cfg.embedding.batch_size, cluster=200 by
+    default). Calling each stage exactly once -- the previous behaviour --
+    left any remainder beyond one batch stranded at the prior stage with no
+    warning, and the backlog would only grow on a source producing more
+    than a batch's worth of items between runs. `drain()` loops each stage
+    until it reports zero progress, so a single `feed run` invocation
+    genuinely empties the queue (bounded by drain()'s own safety cap, so a
+    stage that can never make progress still can't hang this forever).
+    """
     _, factory = _session(cfg)
     backend, model, device = resolve(cfg.embedding)
     print(f"embedding: backend={backend} model={model} device={device}")
@@ -90,13 +104,21 @@ def cmd_run(args, cfg: Config) -> int:
         c = collect(s)
         print(f"collect:   new={c.new_items} dupes={c.skipped_duplicates} "
               f"source_errors={len(c.source_errors)}")
-        for name, res in [
-            ("normalize", normalize(s)),
-            ("embed", embed(s, embedder, limit=cfg.embedding.batch_size)),
-            ("cluster", cluster(s, cfg.clustering, adjudicator)),
-            ("score", score_stories(s, cfg.scoring)),
+        for name, stage_fn in [
+            ("normalize", lambda: normalize(s)),
+            ("embed", lambda: embed(s, embedder, limit=cfg.embedding.batch_size)),
+            ("cluster", lambda: cluster(s, cfg.clustering, adjudicator)),
+            ("score", lambda: score_stories(s, cfg.scoring)),
         ]:
-            print(f"{name+':':<11}ok={res.processed} failed={res.failed}")
+            res = drain(stage_fn)
+            print(f"{name+':':<11}ok={res.processed} failed={res.failed} "
+                  f"rounds={res.rounds}")
+            if res.rounds >= DEFAULT_MAX_ROUNDS:
+                log.warning(
+                    "%s: hit the %d-round drain safety cap; the queue may "
+                    "not be fully drained -- check for a stuck row",
+                    name, DEFAULT_MAX_ROUNDS,
+                )
     return 0
 
 

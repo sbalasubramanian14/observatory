@@ -116,6 +116,94 @@ def test_run_wires_per_model_threshold_into_adjudicator():
     assert adjudicator.decide(0.15, FakeItem(), None) is Verdict.SAME
 
 
+def test_run_drains_more_than_one_batch_per_stage(tmp_path, monkeypatch, capsys):
+    """I1: feed run used to call each stage exactly once with hardcoded
+    batch limits (normalize=100, cluster=200). This reproduces the
+    finding's own numbers -- 250 collected items, more than both of those
+    batch sizes -- with the embedder stubbed out (no model download, so
+    this stays fast) to isolate the drain behaviour itself. A single `feed
+    run` call must still carry every item all the way to Stage.SCORED, not
+    leave any of them stuck at collected/normalized/embedded/clustered.
+    """
+    import numpy as np
+    import feed.cli as cli_module
+    from feed.config import load_config
+    from feed.db import make_engine, make_session_factory
+    from feed.models import Item, Stage
+
+    class _StubEmbedder:
+        # Spreads items across 8 one-hot directions (by a stable hash of
+        # each item's text) instead of one identical vector for everyone --
+        # a single vector would merge all 250 items into one giant story,
+        # making cluster()'s O(members) centroid/membership recompute on
+        # every merge blow up to O(n^2) with a large constant. Several
+        # smaller stories keep this test fast while still exercising real
+        # clustering logic (candidates, pair_score, adjudication) rather
+        # than a no-op.
+        model_id = "stub/v1"
+        dimensions = 8
+
+        def encode(self, texts):
+            vecs = np.zeros((len(texts), self.dimensions), dtype=np.float32)
+            for row, t in enumerate(texts):
+                vecs[row, hash(t) % self.dimensions] = 1.0
+            return vecs
+
+    monkeypatch.setattr(cli_module, "build_embedder", lambda cfg: _StubEmbedder())
+    # Deterministic and avoids a slow real `import torch` just to probe
+    # CUDA availability -- this test cares about drain behaviour, not
+    # device resolution, and must behave the same on a GPU-equipped runner.
+    monkeypatch.setattr("feed.embedding.resolve.cuda_available", lambda: False)
+
+    n = 130  # > normalize's default limit (100) and > embed's batch_size (50)
+    items_xml = "".join(
+        f"<item><title>Story {i}</title>"
+        f"<link>https://example.com/story-{i}</link>"
+        f"<description>Unique summary text describing story number {i} in detail.</description>"
+        f"<pubDate>Tue, 18 Aug 2026 09:00:00 GMT</pubDate></item>"
+        for i in range(n)
+    )
+    rss_path = tmp_path / "big.xml"
+    rss_path.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>'
+        f"<title>Big feed</title>{items_xml}</channel></rss>",
+        encoding="utf-8",
+    )
+
+    cfg_path = tmp_path / "feed.toml"
+    cfg_path.write_text(
+        f'[database]\nurl = "sqlite:///{(tmp_path / "t.db").as_posix()}"\n'
+        '[embedding]\nbackend = "onnx"\n'
+        'model = "sentence-transformers/all-MiniLM-L6-v2"\n'
+        'device = "cpu"\nbatch_size = 50\n',  # > 1 round needed too (250/50)
+        encoding="utf-8",
+    )
+
+    assert cli_module.main(["--config", str(cfg_path), "init"]) == 0
+    assert cli_module.main([
+        "--config", str(cfg_path), "sources", "add", "--id", "rss:big",
+        "--plugin", "rss", "--config-json", f'{{"path": "{rss_path.as_posix()}"}}',
+    ]) == 0
+    assert cli_module.main(["--config", str(cfg_path), "run"]) == 0
+
+    out = capsys.readouterr().out
+    # rounds > 1 proves drain() actually looped for at least one stage,
+    # not just that the final state happens to look drained.
+    assert any(f"rounds={r}" in out for r in range(2, 51)), out
+
+    cfg = load_config(cfg_path)
+    engine = make_engine(cfg.database.url)
+    factory = make_session_factory(engine)
+    with factory() as s:
+        items = s.query(Item).all()
+        assert len(items) == n
+        stages = {i.stage for i in items}
+        assert stages == {Stage.SCORED}, (
+            f"expected all {n} items to reach SCORED in a single `feed run`, "
+            f"got stages present: {stages}"
+        )
+
+
 @pytest.mark.slow
 def test_full_run_produces_scored_stories(tmp_path, capsys):
     cfg = _cfg(tmp_path)

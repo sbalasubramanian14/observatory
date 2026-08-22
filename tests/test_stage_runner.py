@@ -1,5 +1,5 @@
 from feed.models import Item, Source, Stage
-from feed.stages.base import run_stage
+from feed.stages.base import StageResult, drain, run_stage
 
 
 def _seed(session, n=3):
@@ -95,6 +95,92 @@ def test_consecutive_failures_do_not_break_the_run(session):
     assert by_hash["h2"].stage is Stage.NORMALIZED
     assert "boom-h0" in by_hash["h0"].error
     assert "boom-h1" in by_hash["h1"].error
+
+
+# --- I1: `drain()` loops a stage call until it makes no further progress --
+#
+# feed run's stage limits are fixed batch sizes (normalize=100, cluster=200
+# by default). Before this fix, cmd_run called each stage exactly once, so
+# a run with more than one batch's worth of items left the remainder
+# stranded at the prior stage with no warning. `drain()` is the fix's core:
+# call a zero-arg stage function repeatedly until a call reports zero
+# processed AND zero failed.
+def test_drain_calls_repeatedly_until_a_batch_reports_no_progress(session):
+    _seed(session, n=25)
+    calls = {"n": 0}
+
+    def run_one_batch():
+        calls["n"] += 1
+        return run_stage(session, name="x", claim_stage=Stage.COLLECTED,
+                         next_stage=Stage.NORMALIZED, handler=lambda s, it: None,
+                         limit=10)
+
+    total = drain(run_one_batch)
+
+    assert total.processed == 25
+    assert total.failed == 0
+    # 10 + 10 + 5 = 25, then one more call finds nothing left (0 progress) and stops.
+    assert calls["n"] == 4
+    assert all(i.stage is Stage.NORMALIZED for i in session.query(Item).all())
+
+
+def test_drain_stops_after_one_round_when_there_is_nothing_to_do(session):
+    calls = {"n": 0}
+
+    def always_empty():
+        calls["n"] += 1
+        return StageResult(name="empty")
+
+    total = drain(always_empty)
+
+    assert calls["n"] == 1
+    assert total.processed == 0 and total.failed == 0
+
+
+def test_drain_aggregates_failures_across_rounds_too(session):
+    _seed(session, n=6)
+
+    def handler(s, item):
+        if item.url_hash in ("h0", "h3"):
+            raise RuntimeError(f"boom-{item.url_hash}")
+
+    def run_one_batch():
+        return run_stage(session, name="x", claim_stage=Stage.COLLECTED,
+                         next_stage=Stage.NORMALIZED, handler=handler, limit=3)
+
+    total = drain(run_one_batch)
+
+    assert total.processed == 4
+    assert total.failed == 2
+    assert len(total.errors) == 2
+
+
+def test_drain_respects_the_safety_cap_and_does_not_spin_forever(session):
+    # A stage function that always reports progress but never actually
+    # shrinks a backlog (a hypothetical stage bug) must not loop forever --
+    # the safety cap bounds it.
+    calls = {"n": 0}
+
+    def always_makes_fake_progress():
+        calls["n"] += 1
+        return StageResult(name="stuck", processed=1)
+
+    total = drain(always_makes_fake_progress, max_rounds=5)
+
+    assert calls["n"] == 5
+    assert total.rounds == 5
+    assert total.processed == 5
+
+
+def test_drain_reports_rounds_taken():
+    calls = {"n": 0}
+
+    def two_rounds():
+        calls["n"] += 1
+        return StageResult(name="x", processed=1) if calls["n"] == 1 else StageResult(name="x")
+
+    total = drain(two_rounds)
+    assert total.rounds == 2
 
 
 def test_stage_result_field_names_and_error_tuples(session):
