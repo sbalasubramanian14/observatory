@@ -28,6 +28,47 @@ def _block_real_network(monkeypatch):
     monkeypatch.setattr("trafilatura.fetch_url", _boom)
 
 
+@pytest.fixture(autouse=True)
+def _block_real_gemini_network(monkeypatch):
+    """Same guard, for the Gemini provider (feed/providers/gemini.py).
+
+    complete() calls the module-level _post() seam rather than httpx
+    directly so this can be monkeypatched cleanly. Tests exercising
+    GeminiProvider must monkeypatch feed.providers.gemini._post instead of
+    letting this raise.
+    """
+    def _boom(*args, **kwargs):
+        raise AssertionError(
+            "real network call (feed.providers.gemini._post) attempted during "
+            "a test; monkeypatch feed.providers.gemini._post instead"
+        )
+
+    monkeypatch.setattr("feed.providers.gemini._post", _boom)
+
+
+@pytest.fixture(autouse=True)
+def _block_real_claude_cli(monkeypatch):
+    """Same guard, for the Claude Code provider (feed/providers/claude_code.py).
+
+    complete() calls the module-level _run_cli() seam rather than
+    subprocess.run directly so this can be monkeypatched cleanly. Tests
+    exercising ClaudeCodeProvider must monkeypatch
+    feed.providers.claude_code._run_cli instead of letting this raise.
+    Other subprocess.run call sites (e.g. tests/test_ci_workflow.py, which
+    shells out to pytest itself, not to `claude`) are untouched -- this
+    guard only replaces the provider's own seam function, not subprocess
+    globally.
+    """
+    def _boom(*args, **kwargs):
+        raise AssertionError(
+            "real `claude` CLI invocation (feed.providers.claude_code._run_cli) "
+            "attempted during a test; monkeypatch "
+            "feed.providers.claude_code._run_cli instead"
+        )
+
+    monkeypatch.setattr("feed.providers.claude_code._run_cli", _boom)
+
+
 @pytest.fixture
 def session() -> Session:
     engine = make_engine("sqlite://")   # in-memory
