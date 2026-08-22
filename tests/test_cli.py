@@ -204,6 +204,142 @@ def test_run_drains_more_than_one_batch_per_stage(tmp_path, monkeypatch, capsys)
         )
 
 
+def _seed_scored_story(cfg_path, *, score=0.9):
+    """Seed a scored story directly, bypassing the full pipeline -- these
+    CLI tests exercise enrich/publish wiring, not collect/normalize/embed/
+    cluster/score, which are already covered elsewhere.
+    """
+    from datetime import datetime, timezone
+    from feed.config import load_config
+    from feed.db import create_all, make_engine, make_session_factory
+    from feed.models import Item, Source, Story
+
+    cfg = load_config(cfg_path)
+    engine = make_engine(cfg.database.url)
+    create_all(engine)
+    factory = make_session_factory(engine)
+    with factory() as s:
+        now = datetime.now(timezone.utc)
+        s.add(Source(id="src", plugin="rss", config={}, cadence_minutes=30))
+        story = Story(title="A story", first_seen=now, updated_at=now, item_count=1,
+                      outlet_count=1, score=score)
+        s.add(story)
+        s.flush()
+        s.add(Item(source_id="src", url="http://x/1", url_hash="h1", title="A story",
+                   story_id=story.id, published_at=now))
+        s.commit()
+        return story.id
+
+
+class _FakeCliProvider:
+    def __init__(self, name, model, tier, text):
+        self.name = name
+        self.model = model
+        self.tier = tier
+        self._text = text
+
+    def complete(self, prompt, *, schema=None):
+        return self._text
+
+    def health(self):
+        from feed.providers.base import ProviderHealth
+        return ProviderHealth(healthy=True)
+
+
+def _fake_router():
+    import json
+    from feed.providers.base import Tier
+    from feed.providers.router import Router
+    tier1_json = json.dumps({"headline": "Canonical", "summary": "Sum.", "category": "research"})
+    bulk = _FakeCliProvider("gemini", "gemini-flash-latest", Tier.BULK, tier1_json)
+    deep = _FakeCliProvider("claude-code", "claude-code", Tier.DEEP, "deep analysis")
+    return Router(bulk=bulk, deep=deep)
+
+
+def test_enrich_command_runs_tier1_and_tier2(tmp_path, capsys, monkeypatch):
+    import feed.cli as cli_module
+
+    cfg = _cfg(tmp_path)
+    main(["--config", str(cfg), "init"])
+    _seed_scored_story(cfg, score=0.95)
+    monkeypatch.setattr(cli_module, "_build_router", lambda cfg: _fake_router())
+
+    rc = main(["--config", str(cfg), "enrich"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "tier1: ok=1" in out
+    assert "tier2: ok=1" in out
+
+
+def test_publish_command_writes_bundle(tmp_path, capsys):
+    cfg = _cfg(tmp_path)
+    main(["--config", str(cfg), "init"])
+    _seed_scored_story(cfg, score=0.5)
+    out_dir = tmp_path / "bundle"
+
+    rc = main(["--config", str(cfg), "publish", "--out", str(out_dir)])
+
+    assert rc == 0
+    assert (out_dir / "manifest.json").exists()
+    assert (out_dir / "sources.json").exists()
+    assert "published 1 stories" in capsys.readouterr().out
+
+
+def test_run_enrich_and_publish_flags_are_opt_in(tmp_path, monkeypatch):
+    """Default `feed run` must not touch enrich/publish at all -- they are
+    opt-in flags per the build spec ("wire both into feed run behind flags
+    so the default run stays cheap")."""
+    import feed.cli as cli_module
+
+    calls = []
+    monkeypatch.setattr(cli_module, "enrich", lambda *a, **k: calls.append("enrich"))
+    monkeypatch.setattr(cli_module, "publish", lambda *a, **k: calls.append("publish"))
+    monkeypatch.setattr(cli_module, "build_embedder", lambda cfg: _NoopEmbedder())
+    monkeypatch.setattr("feed.embedding.resolve.cuda_available", lambda: False)
+
+    cfg = _cfg(tmp_path)
+    main(["--config", str(cfg), "init"])
+
+    assert main(["--config", str(cfg), "run"]) == 0
+    assert calls == []
+
+
+def test_run_with_enrich_and_publish_flags_invokes_both(tmp_path, monkeypatch):
+    import feed.cli as cli_module
+    from feed.stages.enrich import EnrichResult
+
+    calls = []
+
+    def _fake_enrich(*a, **k):
+        calls.append("enrich")
+        return EnrichResult()
+
+    monkeypatch.setattr(cli_module, "enrich", _fake_enrich)
+    monkeypatch.setattr(cli_module, "_build_router", lambda cfg: _fake_router())
+    monkeypatch.setattr(cli_module, "build_embedder", lambda cfg: _NoopEmbedder())
+    monkeypatch.setattr("feed.embedding.resolve.cuda_available", lambda: False)
+
+    cfg = _cfg(tmp_path)
+    main(["--config", str(cfg), "init"])
+
+    rc = main(["--config", str(cfg), "run", "--enrich", "--publish",
+              "--out", str(tmp_path / "bundle")])
+
+    assert rc == 0
+    assert calls == ["enrich"]
+    assert (tmp_path / "bundle" / "manifest.json").exists()
+
+
+class _NoopEmbedder:
+    model_id = "noop/v1"
+    dimensions = 4
+
+    def encode(self, texts):
+        import numpy as np
+        return np.zeros((len(texts), self.dimensions), dtype="float32")
+
+
 @pytest.mark.slow
 def test_full_run_produces_scored_stories(tmp_path, capsys):
     cfg = _cfg(tmp_path)

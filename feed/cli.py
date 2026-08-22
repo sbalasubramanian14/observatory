@@ -12,12 +12,17 @@ from feed.db import create_all, make_engine, make_session_factory
 from feed.embedding import build_embedder
 from feed.embedding.resolve import resolve
 from feed.models import Item, Source, Stage, Story
+from feed.providers.claude_code import ClaudeCodeProvider
+from feed.providers.gemini import GeminiProvider
+from feed.providers.router import Router
 from feed.sources.registry import known_plugins
 from feed.stages.base import DEFAULT_MAX_ROUNDS, drain
 from feed.stages.cluster import cluster
 from feed.stages.collect import collect
 from feed.stages.embed import embed
+from feed.stages.enrich import enrich
 from feed.stages.normalize import normalize
+from feed.stages.publish import publish
 from feed.stages.score import score_stories
 
 log = logging.getLogger(__name__)
@@ -45,6 +50,19 @@ def _build_adjudicator(cfg: Config) -> NullAdjudicator:
             threshold_for=cfg.clustering.threshold_for,
         )
     )
+
+
+def _build_router(cfg: Config) -> Router:
+    """Wire the spec 3.5 provider router: Gemini as BULK, Claude Code as
+    DEEP. Building this never itself fails on a missing GEMINI_API_KEY --
+    that surfaces per-story as a ProviderError, isolated by enrich stage's
+    own failure handling, not as a crash here. Kept out of `_session()`'s
+    call path entirely so a plain `feed run` (no --enrich) never even
+    imports/constructs a provider.
+    """
+    bulk = GeminiProvider(model=cfg.providers.gemini_model, timeout=cfg.providers.gemini_timeout)
+    deep = ClaudeCodeProvider(timeout=cfg.providers.claude_code_timeout)
+    return Router(bulk=bulk, deep=deep)
 
 
 def cmd_init(args, cfg: Config) -> int:
@@ -119,6 +137,51 @@ def cmd_run(args, cfg: Config) -> int:
                     "not be fully drained -- check for a stuck row",
                     name, DEFAULT_MAX_ROUNDS,
                 )
+
+        # Both stages are opt-in (spec build order: enrich is "the only
+        # paid stage", publish pushes to a public repo) so the default
+        # `feed run` stays free and side-effect-free outside the local db.
+        if getattr(args, "enrich", False):
+            router = _build_router(cfg)
+            er = enrich(s, router, cfg.providers)
+            print(f"enrich:    tier1 ok={er.tier1_processed} failed={er.tier1_failed}  "
+                  f"tier2 ok={er.tier2_processed} failed={er.tier2_failed} "
+                  f"degraded={er.tier2_degraded}")
+
+        if getattr(args, "publish", False):
+            out_dir = args.out or cfg.publish.out_dir
+            pr = publish(s, cfg.publish, out_dir)
+            if pr.published:
+                print(f"publish:   stories={pr.story_count} pages={pr.page_count} "
+                      f"pruned={pr.pruned} out={pr.out_dir}")
+            else:
+                print(f"publish:   FAILED: {pr.error}", file=sys.stderr)
+    return 0
+
+
+def cmd_enrich(args, cfg: Config) -> int:
+    _, factory = _session(cfg)
+    router = _build_router(cfg)
+    with factory() as s:
+        er = enrich(s, router, cfg.providers)
+    print(f"tier1: ok={er.tier1_processed} failed={er.tier1_failed}")
+    print(f"tier2: ok={er.tier2_processed} failed={er.tier2_failed} "
+          f"degraded={er.tier2_degraded}")
+    for story_id, msg in er.errors:
+        print(f"  story={story_id}: {msg}", file=sys.stderr)
+    return 0
+
+
+def cmd_publish(args, cfg: Config) -> int:
+    _, factory = _session(cfg)
+    out_dir = args.out or cfg.publish.out_dir
+    with factory() as s:
+        pr = publish(s, cfg.publish, out_dir)
+    if not pr.published:
+        print(f"publish failed: {pr.error}", file=sys.stderr)
+        return 1
+    print(f"published {pr.story_count} stories across {pr.page_count} page(s) "
+          f"to {pr.out_dir} (pruned {pr.pruned} stale file(s))")
     return 0
 
 
@@ -148,8 +211,25 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init").set_defaults(func=cmd_init)
-    sub.add_parser("run").set_defaults(func=cmd_run)
+
+    run = sub.add_parser("run")
+    run.add_argument("--enrich", action="store_true",
+                     help="also run Tier 1/Tier 2 LLM enrichment (spends API/CLI calls)")
+    run.add_argument("--publish", action="store_true",
+                     help="also publish the static bundle after enriching")
+    run.add_argument("--out", type=Path, default=None,
+                     help="bundle output directory (default: [publish].out_dir)")
+    run.set_defaults(func=cmd_run)
+
     sub.add_parser("stats").set_defaults(func=cmd_stats)
+
+    enrich_p = sub.add_parser("enrich")
+    enrich_p.set_defaults(func=cmd_enrich)
+
+    publish_p = sub.add_parser("publish")
+    publish_p.add_argument("--out", type=Path, default=None,
+                           help="bundle output directory (default: [publish].out_dir)")
+    publish_p.set_defaults(func=cmd_publish)
 
     srcs = sub.add_parser("sources").add_subparsers(dest="sub", required=True)
     add = srcs.add_parser("add")
