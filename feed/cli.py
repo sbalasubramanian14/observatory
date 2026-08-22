@@ -1,0 +1,148 @@
+from __future__ import annotations
+import argparse
+import json
+import logging
+import sys
+from pathlib import Path
+from sqlalchemy import func, select
+import feed.sources  # noqa: F401  (registers plugins)
+from feed.clustering.adjudicate import NullAdjudicator, ThresholdAdjudicator
+from feed.config import Config, load_config
+from feed.db import create_all, make_engine, make_session_factory
+from feed.embedding import build_embedder
+from feed.embedding.resolve import resolve
+from feed.models import Item, Source, Stage, Story
+from feed.sources.registry import known_plugins
+from feed.stages.cluster import cluster
+from feed.stages.collect import collect
+from feed.stages.embed import embed
+from feed.stages.normalize import normalize
+from feed.stages.score import score_stories
+
+log = logging.getLogger(__name__)
+
+
+def _session(cfg: Config):
+    engine = make_engine(cfg.database.url)
+    return engine, make_session_factory(engine)
+
+
+def _build_adjudicator(cfg: Config) -> NullAdjudicator:
+    """Build the Phase 1 adjudicator, wired to per-model thresholds.
+
+    Ruling 1 (task-14 brief): Task 11 moved per-model merge thresholds into
+    the adjudicator via the keyword-only `threshold_for` provider. Without
+    passing `threshold_for=cfg.clustering.threshold_for` here, the real
+    pipeline would silently ignore the per-model threshold map -- including
+    the 0.35 MiniLM threshold measured in Task 12 and stored in feed.toml --
+    and always fall back to the single global `merge_threshold` instead.
+    See tests/test_cli.py::test_run_wires_per_model_threshold_into_adjudicator.
+    """
+    return NullAdjudicator(
+        ThresholdAdjudicator(
+            merge_threshold=cfg.clustering.merge_threshold,
+            threshold_for=cfg.clustering.threshold_for,
+        )
+    )
+
+
+def cmd_init(args, cfg: Config) -> int:
+    engine, _ = _session(cfg)
+    create_all(engine)
+    print(f"initialised {cfg.database.url}")
+    return 0
+
+
+def cmd_sources_add(args, cfg: Config) -> int:
+    if args.plugin not in known_plugins():
+        print(f"unknown plugin {args.plugin!r}; known: {known_plugins()}", file=sys.stderr)
+        return 2
+    try:
+        conf = json.loads(args.config_json)
+    except json.JSONDecodeError as exc:
+        print(f"--config-json is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+    _, factory = _session(cfg)
+    with factory() as s:
+        s.merge(Source(id=args.id, plugin=args.plugin, config=conf,
+                       cadence_minutes=args.cadence, authority=args.authority))
+        s.commit()
+    print(f"added source {args.id}")
+    return 0
+
+
+def cmd_sources_list(args, cfg: Config) -> int:
+    _, factory = _session(cfg)
+    with factory() as s:
+        for src in s.scalars(select(Source).order_by(Source.id)):
+            state = "ok" if src.consecutive_failures == 0 else f"FAILING x{src.consecutive_failures}"
+            print(f"{src.id:<28} {src.plugin:<18} every {src.cadence_minutes:>4}m  {state}")
+    return 0
+
+
+def cmd_run(args, cfg: Config) -> int:
+    _, factory = _session(cfg)
+    backend, model, device = resolve(cfg.embedding)
+    print(f"embedding: backend={backend} model={model} device={device}")
+    embedder = build_embedder(cfg.embedding)
+    adjudicator = _build_adjudicator(cfg)
+    with factory() as s:
+        c = collect(s)
+        print(f"collect:   new={c.new_items} dupes={c.skipped_duplicates} "
+              f"source_errors={len(c.source_errors)}")
+        for name, res in [
+            ("normalize", normalize(s)),
+            ("embed", embed(s, embedder, limit=cfg.embedding.batch_size)),
+            ("cluster", cluster(s, cfg.clustering, adjudicator)),
+            ("score", score_stories(s, cfg.scoring)),
+        ]:
+            print(f"{name+':':<11}ok={res.processed} failed={res.failed}")
+    return 0
+
+
+def cmd_stats(args, cfg: Config) -> int:
+    _, factory = _session(cfg)
+    with factory() as s:
+        print("items by stage:")
+        for stage, n in s.execute(
+            select(Item.stage, func.count()).group_by(Item.stage)
+        ):
+            print(f"  {stage.value:<12}{n}")
+        total = s.scalar(select(func.count()).select_from(Story)) or 0
+        print(f"stories: {total}")
+        print("top stories by importance:")
+        for st in s.scalars(
+            select(Story).where(Story.score.is_not(None))
+            .order_by(Story.score.desc()).limit(10)
+        ):
+            print(f"  {st.score:.3f}  [{st.outlet_count} outlets]  {st.title[:70]}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="feed")
+    p.add_argument("--config", type=Path, default=None)
+    p.add_argument("-v", "--verbose", action="store_true")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("init").set_defaults(func=cmd_init)
+    sub.add_parser("run").set_defaults(func=cmd_run)
+    sub.add_parser("stats").set_defaults(func=cmd_stats)
+
+    srcs = sub.add_parser("sources").add_subparsers(dest="sub", required=True)
+    add = srcs.add_parser("add")
+    add.add_argument("--id", required=True)
+    add.add_argument("--plugin", required=True)
+    add.add_argument("--config-json", default="{}")
+    add.add_argument("--cadence", type=int, default=30)
+    add.add_argument("--authority", type=float, default=0.5)
+    add.set_defaults(func=cmd_sources_add)
+    srcs.add_parser("list").set_defaults(func=cmd_sources_list)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(levelname)s %(name)s: %(message)s")
+    return args.func(args, load_config(args.config))
