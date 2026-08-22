@@ -116,3 +116,24 @@ def test_onnx_embedder_produces_normalisable_vectors():
     assert emb.model_id.endswith("all-MiniLM-L6-v2")
     sim = float(V[0] @ V[1] / (np.linalg.norm(V[0]) * np.linalg.norm(V[1])))
     assert -1.0 <= sim <= 1.0
+
+
+@pytest.mark.slow
+def test_torch_embedder_produces_correct_shape_and_handles_empty():
+    # TorchEmbedder had never been executed (only its selection path via a
+    # mocked resolve() was covered). This exercises the real backend
+    # end-to-end on CPU: construction, encode() shape/model_id/dimensions,
+    # and the empty-input branch that returns shape (0, dimensions) rather
+    # than raising.
+    from feed.embedding.torch_backend import TorchEmbedder
+
+    emb = TorchEmbedder(
+        "sentence-transformers/all-MiniLM-L6-v2", device="cpu", batch_size=8
+    )
+    V = emb.encode(["DeepSeek releases V4", "EU delays the AI Act"])
+    assert V.shape == (2, emb.dimensions)
+    assert emb.model_id == "sentence-transformers/all-MiniLM-L6-v2"
+    assert emb.dimensions > 0
+
+    empty = emb.encode([])
+    assert empty.shape == (0, emb.dimensions)
