@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from feed.models import Source, Item, Story, Stage
+from feed.models import Source, Item, Story, Stage, StoryStatus
 
 def test_item_starts_in_collected_stage(session):
     src = Source(id="rss:example", plugin="rss", config={"url": "http://x"}, cadence_minutes=30)
@@ -26,6 +26,37 @@ def test_story_tracks_item_count_and_updated_at(session):
     session.commit()
     assert st.id is not None
     assert st.score is None
+
+def test_story_defaults_to_new_status_with_no_enrichment(session):
+    st = Story(title="S", first_seen=datetime.now(timezone.utc),
+               updated_at=datetime.now(timezone.utc), item_count=0)
+    session.add(st)
+    session.commit()
+    session.expire_all()
+    reloaded = session.get(Story, st.id)
+    assert reloaded.status is StoryStatus.NEW
+    assert reloaded.summary is None
+    assert reloaded.category is None
+    assert reloaded.analysis is None
+    assert reloaded.analysis_provider is None
+    assert reloaded.analyzed_at is None
+
+def test_story_enrichment_fields_round_trip(session):
+    now = datetime.now(timezone.utc)
+    st = Story(title="Canonical headline", first_seen=now, updated_at=now,
+               item_count=1, summary="Two sentence summary.", category="research",
+               analysis="Why this matters.", analysis_provider="claude-code:claude-code",
+               analyzed_at=now, status=StoryStatus.ANALYZED)
+    session.add(st)
+    session.commit()
+    session.expire_all()
+    reloaded = session.get(Story, st.id)
+    assert reloaded.summary == "Two sentence summary."
+    assert reloaded.category == "research"
+    assert reloaded.analysis == "Why this matters."
+    assert reloaded.analysis_provider == "claude-code:claude-code"
+    assert reloaded.analyzed_at == now
+    assert reloaded.status is StoryStatus.ANALYZED
 
 def test_source_last_run_at_round_trips_as_aware_utc(session):
     written = datetime(2026, 8, 18, 8, 0, tzinfo=timezone.utc)

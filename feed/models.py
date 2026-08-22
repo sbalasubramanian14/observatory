@@ -49,6 +49,25 @@ class Stage(enum.Enum):
     SCORED = "scored"
     FAILED = "failed"
 
+
+class StoryStatus(enum.Enum):
+    """Enrich-stage progress for a story, per spec 3.5's LLM tiering.
+
+    NEW       -- scored, not yet through Tier 1.
+    ENRICHED  -- Tier 1 (bulk headline/summary/category) done.
+    ANALYZED  -- Tier 2 (deep "why this matters") done by the real DEEP
+                 provider.
+    RETRY     -- Tier 2 was attempted but the DEEP provider was unavailable
+                 or failed, so the router degraded to the BULK provider's
+                 simpler prompt (spec 3.5: "flagged for retry"). The story
+                 keeps a usable analysis in the meantime but stays eligible
+                 for re-selection next time Tier 2 runs.
+    """
+    NEW = "new"
+    ENRICHED = "enriched"
+    ANALYZED = "analyzed"
+    RETRY = "retry"
+
 class Source(Base):
     __tablename__ = "source"
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -95,6 +114,21 @@ class Story(Base):
     score: Mapped[float | None] = mapped_column(Float, index=True)
     score_breakdown: Mapped[dict | None] = mapped_column(JSON)
     centroid: Mapped[bytes | None] = mapped_column(LargeBinary)
+    # Phase 2 enrichment (spec 3.5, 3.2). `title` doubles as the Tier 1
+    # canonical headline once enrichment has run -- before that it is
+    # whatever the cluster stage seeded it with (the first item's title).
+    summary: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(String(64))
+    analysis: Mapped[str | None] = mapped_column(Text)
+    # "<provider name>:<model>", e.g. "claude-code:claude-code" or, on a
+    # degraded Tier 2 fallback, "gemini:gemini-flash-latest" -- provenance
+    # is a hard requirement (spec 3.5: "Every analysis records the provider
+    # and model that produced it").
+    analysis_provider: Mapped[str | None] = mapped_column(String(128))
+    analyzed_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+    status: Mapped[StoryStatus] = mapped_column(
+        Enum(StoryStatus), default=StoryStatus.NEW, index=True
+    )
     items: Mapped[list[Item]] = relationship(back_populates="story")
 
 class Entity(Base):
