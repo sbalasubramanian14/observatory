@@ -25,3 +25,6 @@ VERCEL-SETUP.md
 .playwright-mcp/
 public/
 .playwright-mcp/
+LLM-PROVIDERS.md
+PIPELINE-CLI.md
+IMPLEMENTATION-TRACKER.md
