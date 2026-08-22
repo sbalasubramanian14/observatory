@@ -65,3 +65,49 @@ def test_threshold_for_none_falls_back_to_merge_threshold(tmp_path):
 def test_merge_thresholds_defaults_to_empty_dict(tmp_path):
     cfg = load_config(tmp_path / "missing.toml")
     assert cfg.clustering.merge_thresholds == {}
+
+
+def test_providers_defaults(tmp_path):
+    cfg = load_config(tmp_path / "missing.toml")
+    assert cfg.providers.gemini_model == "gemini-flash-latest"
+    assert cfg.providers.daily_budget == 20
+    assert 0.0 <= cfg.providers.tier2_score_cut <= 1.0
+
+
+def test_providers_file_overrides_defaults(tmp_path):
+    p = tmp_path / "feed.toml"
+    p.write_text(
+        "[providers]\ngemini_model = \"gemini-2.5-flash\"\ndaily_budget = 5\n"
+        "tier2_score_cut = 0.8\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(p)
+    assert cfg.providers.gemini_model == "gemini-2.5-flash"
+    assert cfg.providers.daily_budget == 5
+    assert cfg.providers.tier2_score_cut == 0.8
+
+
+def test_providers_daily_budget_must_be_positive(tmp_path):
+    p = tmp_path / "feed.toml"
+    p.write_text("[providers]\ndaily_budget = 0\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_config(p)
+
+
+def test_publish_defaults(tmp_path):
+    cfg = load_config(tmp_path / "missing.toml")
+    assert cfg.publish.out_dir == "public"
+    assert cfg.publish.retention_days == 90
+    assert cfg.publish.page_size == 50
+
+
+def test_publish_file_overrides_defaults(tmp_path):
+    p = tmp_path / "feed.toml"
+    p.write_text(
+        "[publish]\nout_dir = \"bundle\"\nretention_days = 30\npage_size = 10\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(p)
+    assert cfg.publish.out_dir == "bundle"
+    assert cfg.publish.retention_days == 30
+    assert cfg.publish.page_size == 10

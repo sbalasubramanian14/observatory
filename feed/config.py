@@ -78,11 +78,42 @@ class ScoringConfig(BaseModel):
     )
 
 
+class ProvidersConfig(BaseModel):
+    """Spec 3.5 LLM tiering. Gemini is the BULK provider (Tier 1, once per
+    story); Claude Code is the DEEP provider (Tier 2, budgeted). Neither
+    section carries a secret -- the Gemini key comes from the environment /
+    .env, never from feed.toml, so this config is safe to commit.
+    """
+    gemini_model: str = "gemini-flash-latest"
+    gemini_timeout: float = Field(default=30.0, gt=0)
+    claude_code_timeout: float = Field(default=120.0, gt=0)
+    # Tier 2 eligibility: a story's importance score (0..1, see scoring)
+    # must clear this cut to be a Tier 2 candidate at all. Spec 9.6 says
+    # this "cannot be guessed and must come from a live score distribution"
+    # -- 0.6 is a placeholder starting point, tune after observing real
+    # scores.
+    tier2_score_cut: float = Field(default=0.6, ge=0.0, le=1.0)
+    # Spec 3.5 / 9.2: "Tier 2 daily budget -- starts at 20 stories/day, to
+    # be tuned against observed Claude Code rate limits." Budgeted by call
+    # count, not tokens, because Claude Code is subscription-billed.
+    daily_budget: int = Field(default=20, gt=0)
+
+
+class PublishConfig(BaseModel):
+    """Spec 4.1/4.4: the static bundle the Publish stage writes."""
+    out_dir: str = "public"
+    # Spec 4.4: "prunes files outside a rolling window (default 90 days)".
+    retention_days: int = Field(default=90, gt=0)
+    page_size: int = Field(default=50, gt=0)
+
+
 class Config(BaseModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     clustering: ClusteringConfig = Field(default_factory=ClusteringConfig)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
+    providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    publish: PublishConfig = Field(default_factory=PublishConfig)
 
 
 def load_config(path: Path | None = None) -> Config:

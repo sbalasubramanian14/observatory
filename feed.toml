@@ -31,3 +31,23 @@ merge_threshold = 0.50
 # (band low=0.30 high=0.40 width=0.10). See feed/config.py for details.
 [clustering.merge_thresholds]
 "sentence-transformers/all-MiniLM-L6-v2" = 0.35
+
+# Spec 3.5 LLM tiering. No secrets here -- GEMINI_API_KEY comes from the
+# environment / gitignored .env, never from this file. gemini-flash-latest
+# is used deliberately over a pinned version (e.g. gemini-2.0-flash, which
+# is now dead) so a future model retirement doesn't silently break Tier 1.
+[providers]
+gemini_model = "gemini-flash-latest"
+gemini_timeout = 30.0
+claude_code_timeout = 120.0
+# Placeholder starting points per spec open questions 6/9.2 -- both need
+# tuning once a live score distribution and observed Claude Code rate
+# limits exist.
+tier2_score_cut = 0.6
+daily_budget = 20
+
+# Spec 4.1/4.4: the static bundle the Publish stage writes.
+[publish]
+out_dir = "public"
+retention_days = 90
+page_size = 50
