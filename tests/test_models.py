@@ -26,3 +26,26 @@ def test_story_tracks_item_count_and_updated_at(session):
     session.commit()
     assert st.id is not None
     assert st.score is None
+
+def test_source_last_run_at_round_trips_as_aware_utc(session):
+    written = datetime(2026, 8, 18, 8, 0, tzinfo=timezone.utc)
+    session.add(Source(id="s", plugin="rss", config={}, cadence_minutes=30,
+                        last_run_at=written))
+    session.commit()
+    session.expire_all()  # force a genuine reload from sqlite, not the identity map
+    reloaded = session.get(Source, "s")
+    assert reloaded.last_run_at.tzinfo is not None
+    assert reloaded.last_run_at == written
+
+def test_item_published_at_round_trips_as_aware_utc(session):
+    written = datetime(2026, 8, 18, 9, 0, tzinfo=timezone.utc)
+    session.add(Source(id="s", plugin="rss", config={}, cadence_minutes=30))
+    item = Item(source_id="s", url="http://x/1", url_hash="h1", title="T",
+                published_at=written)
+    session.add(item)
+    session.commit()
+    item_id = item.id
+    session.expire_all()  # force a genuine reload from sqlite, not the identity map
+    reloaded = session.get(Item, item_id)
+    assert reloaded.published_at.tzinfo is not None
+    assert reloaded.published_at == written
