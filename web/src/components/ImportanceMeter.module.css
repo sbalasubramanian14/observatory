@@ -1,0 +1,46 @@
+.wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+}
+
+.bar {
+  position: relative;
+  width: 40px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  overflow: hidden;
+}
+
+.fill {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-pill);
+}
+
+.high .fill {
+  background: var(--color-importance-high);
+}
+.medium .fill {
+  background: var(--color-importance-medium);
+}
+.low .fill {
+  background: var(--color-importance-low);
+}
+
+.value {
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.high .value {
+  color: var(--color-importance-high);
+}
+.medium .value {
+  color: var(--color-importance-medium);
+}
+.low .value {
+  color: var(--color-importance-low);
+}

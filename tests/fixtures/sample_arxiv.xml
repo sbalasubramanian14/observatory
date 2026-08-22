@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2607.09510v1</id>
+    <updated>2026-07-13T10:04:00Z</updated>
+    <published>2026-07-13T10:04:00Z</published>
+    <title>Failure as a Process: An Anatomy of CLI Coding Agent Trajectories</title>
+    <summary>We analyse 1184 failed trajectories from three coding agent scaffolds.</summary>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2606.17799v2</id>
+    <updated>2026-06-20T08:00:00Z</updated>
+    <published>2026-06-19T08:00:00Z</published>
+    <title>Position: Coding Benchmarks Are Misaligned with Agentic Software Engineering</title>
+    <summary>Benchmarks measure one-shot generation while real work is iterative.</summary>
+  </entry>
+</feed>

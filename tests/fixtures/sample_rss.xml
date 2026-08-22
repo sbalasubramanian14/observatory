@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>Example AI Blog</title>
+  <item>
+    <title>DeepSeek releases V4</title>
+    <link>https://example.com/deepseek-v4?utm_source=rss&amp;utm_medium=feed</link>
+    <description>The lab published weights under an MIT license.</description>
+    <pubDate>Tue, 18 Aug 2026 09:00:00 GMT</pubDate>
+  </item>
+  <item>
+    <title>EU delays AI Act</title>
+    <link>https://example.com/eu-delay</link>
+    <description>Enforcement postponed by eighteen months.</description>
+    <pubDate>Tue, 18 Aug 2026 11:30:00 GMT</pubDate>
+  </item>
+</channel></rss>

@@ -1,0 +1,6 @@
+[
+  {"id": 1, "title": "Show HN: DeepSeek V4 weights are up", "url": "https://example.com/v4", "score": 412, "time": 1787000000, "type": "story"},
+  {"id": 2, "title": "Low score story", "url": "https://example.com/meh", "score": 12, "time": 1787000100, "type": "story"},
+  {"id": 3, "title": "Ask HN: no url", "score": 300, "time": 1787000200, "type": "story"},
+  {"id": 4, "title": "A job posting", "url": "https://example.com/job", "score": 500, "time": 1787000300, "type": "job"}
+]

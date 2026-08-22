@@ -1,0 +1,37 @@
+.group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--color-surface-sunken);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.option:hover {
+  color: var(--color-text-primary);
+}
+
+.optionActive {
+  background: var(--color-surface-elevated);
+  color: var(--color-accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.icon {
+  width: 16px;
+  height: 16px;
+}

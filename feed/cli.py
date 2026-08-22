@@ -1,0 +1,250 @@
+from __future__ import annotations
+import argparse
+import json
+import logging
+import sys
+from pathlib import Path
+from sqlalchemy import func, select
+import feed.sources  # noqa: F401  (registers plugins)
+from feed.clustering.adjudicate import NullAdjudicator, ThresholdAdjudicator
+from feed.config import Config, load_config
+from feed.db import create_all, make_engine, make_session_factory
+from feed.embedding import build_embedder
+from feed.embedding.resolve import resolve
+from feed.models import Item, Source, Stage, Story
+from feed.providers.claude_code import ClaudeCodeProvider
+from feed.providers.gemini import GeminiProvider
+from feed.providers.router import Router
+from feed.sources.registry import known_plugins
+from feed.stages.base import DEFAULT_MAX_ROUNDS, drain
+from feed.stages.cluster import cluster
+from feed.stages.collect import collect
+from feed.stages.embed import embed
+from feed.stages.enrich import enrich
+from feed.stages.normalize import normalize
+from feed.stages.publish import publish
+from feed.stages.score import score_stories
+
+log = logging.getLogger(__name__)
+
+
+def _session(cfg: Config):
+    engine = make_engine(cfg.database.url)
+    return engine, make_session_factory(engine)
+
+
+def _build_adjudicator(cfg: Config) -> NullAdjudicator:
+    """Build the Phase 1 adjudicator, wired to per-model thresholds.
+
+    Ruling 1 (task-14 brief): Task 11 moved per-model merge thresholds into
+    the adjudicator via the keyword-only `threshold_for` provider. Without
+    passing `threshold_for=cfg.clustering.threshold_for` here, the real
+    pipeline would silently ignore the per-model threshold map -- including
+    the 0.35 MiniLM threshold measured in Task 12 and stored in feed.toml --
+    and always fall back to the single global `merge_threshold` instead.
+    See tests/test_cli.py::test_run_wires_per_model_threshold_into_adjudicator.
+    """
+    return NullAdjudicator(
+        ThresholdAdjudicator(
+            merge_threshold=cfg.clustering.merge_threshold,
+            threshold_for=cfg.clustering.threshold_for,
+        )
+    )
+
+
+def _build_router(cfg: Config) -> Router:
+    """Wire the spec 3.5 provider router: Gemini as BULK, Claude Code as
+    DEEP. Building this never itself fails on a missing GEMINI_API_KEY --
+    that surfaces per-story as a ProviderError, isolated by enrich stage's
+    own failure handling, not as a crash here. Kept out of `_session()`'s
+    call path entirely so a plain `feed run` (no --enrich) never even
+    imports/constructs a provider.
+    """
+    bulk = GeminiProvider(model=cfg.providers.gemini_model, timeout=cfg.providers.gemini_timeout)
+    deep = ClaudeCodeProvider(timeout=cfg.providers.claude_code_timeout)
+    return Router(bulk=bulk, deep=deep)
+
+
+def cmd_init(args, cfg: Config) -> int:
+    engine, _ = _session(cfg)
+    create_all(engine)
+    print(f"initialised {cfg.database.url}")
+    return 0
+
+
+def cmd_sources_add(args, cfg: Config) -> int:
+    if args.plugin not in known_plugins():
+        print(f"unknown plugin {args.plugin!r}; known: {known_plugins()}", file=sys.stderr)
+        return 2
+    try:
+        conf = json.loads(args.config_json)
+    except json.JSONDecodeError as exc:
+        print(f"--config-json is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+    _, factory = _session(cfg)
+    with factory() as s:
+        s.merge(Source(id=args.id, plugin=args.plugin, config=conf,
+                       cadence_minutes=args.cadence, authority=args.authority))
+        s.commit()
+    print(f"added source {args.id}")
+    return 0
+
+
+def cmd_sources_list(args, cfg: Config) -> int:
+    _, factory = _session(cfg)
+    with factory() as s:
+        for src in s.scalars(select(Source).order_by(Source.id)):
+            state = "ok" if src.consecutive_failures == 0 else f"FAILING x{src.consecutive_failures}"
+            print(f"{src.id:<28} {src.plugin:<18} every {src.cadence_minutes:>4}m  {state}")
+    return 0
+
+
+def cmd_run(args, cfg: Config) -> int:
+    """Run one full pipeline pass: collect, then drain normalize/embed/
+    cluster/score to completion.
+
+    I1 fix: each of those four stages claims a fixed-size batch per call
+    (normalize=100, embed=cfg.embedding.batch_size, cluster=200 by
+    default). Calling each stage exactly once -- the previous behaviour --
+    left any remainder beyond one batch stranded at the prior stage with no
+    warning, and the backlog would only grow on a source producing more
+    than a batch's worth of items between runs. `drain()` loops each stage
+    until it reports zero progress, so a single `feed run` invocation
+    genuinely empties the queue (bounded by drain()'s own safety cap, so a
+    stage that can never make progress still can't hang this forever).
+    """
+    _, factory = _session(cfg)
+    backend, model, device = resolve(cfg.embedding)
+    print(f"embedding: backend={backend} model={model} device={device}")
+    embedder = build_embedder(cfg.embedding)
+    adjudicator = _build_adjudicator(cfg)
+    with factory() as s:
+        c = collect(s)
+        print(f"collect:   new={c.new_items} dupes={c.skipped_duplicates} "
+              f"source_errors={len(c.source_errors)}")
+        for name, stage_fn in [
+            ("normalize", lambda: normalize(s)),
+            ("embed", lambda: embed(s, embedder, limit=cfg.embedding.batch_size)),
+            ("cluster", lambda: cluster(s, cfg.clustering, adjudicator)),
+            ("score", lambda: score_stories(s, cfg.scoring)),
+        ]:
+            res = drain(stage_fn)
+            print(f"{name+':':<11}ok={res.processed} failed={res.failed} "
+                  f"rounds={res.rounds}")
+            if res.rounds >= DEFAULT_MAX_ROUNDS:
+                log.warning(
+                    "%s: hit the %d-round drain safety cap; the queue may "
+                    "not be fully drained -- check for a stuck row",
+                    name, DEFAULT_MAX_ROUNDS,
+                )
+
+        # Both stages are opt-in (spec build order: enrich is "the only
+        # paid stage", publish pushes to a public repo) so the default
+        # `feed run` stays free and side-effect-free outside the local db.
+        if getattr(args, "enrich", False):
+            router = _build_router(cfg)
+            er = enrich(s, router, cfg.providers)
+            print(f"enrich:    tier1 ok={er.tier1_processed} failed={er.tier1_failed}  "
+                  f"tier2 ok={er.tier2_processed} failed={er.tier2_failed} "
+                  f"degraded={er.tier2_degraded}")
+
+        if getattr(args, "publish", False):
+            out_dir = args.out or cfg.publish.out_dir
+            pr = publish(s, cfg.publish, out_dir)
+            if pr.published:
+                print(f"publish:   stories={pr.story_count} pages={pr.page_count} "
+                      f"pruned={pr.pruned} out={pr.out_dir}")
+            else:
+                print(f"publish:   FAILED: {pr.error}", file=sys.stderr)
+    return 0
+
+
+def cmd_enrich(args, cfg: Config) -> int:
+    _, factory = _session(cfg)
+    router = _build_router(cfg)
+    with factory() as s:
+        er = enrich(s, router, cfg.providers)
+    print(f"tier1: ok={er.tier1_processed} failed={er.tier1_failed}")
+    print(f"tier2: ok={er.tier2_processed} failed={er.tier2_failed} "
+          f"degraded={er.tier2_degraded}")
+    for story_id, msg in er.errors:
+        print(f"  story={story_id}: {msg}", file=sys.stderr)
+    return 0
+
+
+def cmd_publish(args, cfg: Config) -> int:
+    _, factory = _session(cfg)
+    out_dir = args.out or cfg.publish.out_dir
+    with factory() as s:
+        pr = publish(s, cfg.publish, out_dir)
+    if not pr.published:
+        print(f"publish failed: {pr.error}", file=sys.stderr)
+        return 1
+    print(f"published {pr.story_count} stories across {pr.page_count} page(s) "
+          f"to {pr.out_dir} (pruned {pr.pruned} stale file(s))")
+    return 0
+
+
+def cmd_stats(args, cfg: Config) -> int:
+    _, factory = _session(cfg)
+    with factory() as s:
+        print("items by stage:")
+        for stage, n in s.execute(
+            select(Item.stage, func.count()).group_by(Item.stage)
+        ):
+            print(f"  {stage.value:<12}{n}")
+        total = s.scalar(select(func.count()).select_from(Story)) or 0
+        print(f"stories: {total}")
+        print("top stories by importance:")
+        for st in s.scalars(
+            select(Story).where(Story.score.is_not(None))
+            .order_by(Story.score.desc()).limit(10)
+        ):
+            print(f"  {st.score:.3f}  [{st.outlet_count} outlets]  {st.title[:70]}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="feed")
+    p.add_argument("--config", type=Path, default=None)
+    p.add_argument("-v", "--verbose", action="store_true")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("init").set_defaults(func=cmd_init)
+
+    run = sub.add_parser("run")
+    run.add_argument("--enrich", action="store_true",
+                     help="also run Tier 1/Tier 2 LLM enrichment (spends API/CLI calls)")
+    run.add_argument("--publish", action="store_true",
+                     help="also publish the static bundle after enriching")
+    run.add_argument("--out", type=Path, default=None,
+                     help="bundle output directory (default: [publish].out_dir)")
+    run.set_defaults(func=cmd_run)
+
+    sub.add_parser("stats").set_defaults(func=cmd_stats)
+
+    enrich_p = sub.add_parser("enrich")
+    enrich_p.set_defaults(func=cmd_enrich)
+
+    publish_p = sub.add_parser("publish")
+    publish_p.add_argument("--out", type=Path, default=None,
+                           help="bundle output directory (default: [publish].out_dir)")
+    publish_p.set_defaults(func=cmd_publish)
+
+    srcs = sub.add_parser("sources").add_subparsers(dest="sub", required=True)
+    add = srcs.add_parser("add")
+    add.add_argument("--id", required=True)
+    add.add_argument("--plugin", required=True)
+    add.add_argument("--config-json", default="{}")
+    add.add_argument("--cadence", type=int, default=30)
+    add.add_argument("--authority", type=float, default=0.5)
+    add.set_defaults(func=cmd_sources_add)
+    srcs.add_parser("list").set_defaults(func=cmd_sources_list)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(levelname)s %(name)s: %(message)s")
+    return args.func(args, load_config(args.config))

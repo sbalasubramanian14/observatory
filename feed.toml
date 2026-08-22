@@ -1,0 +1,53 @@
+# feed.toml
+[database]
+url = "sqlite:///feed.db"
+
+[embedding]
+backend = "auto"
+# No explicit `model =` here, deliberately (C2 fix): resolve() only swaps
+# in the fast CPU default (MiniLM) when the model field is left UNSET
+# (feed/embedding/resolve.py checks model_fields_set, not the value). A
+# pinned "BAAI/bge-small-en-v1.5" here used to survive onto every CPU
+# machine, forcing the anomalously slow onnx+bge-small combination
+# (measured 2.8 docs/s, ~6 min/1000 items, vs 89.6 docs/s for onnx+MiniLM)
+# and silently stranding the 0.35 MiniLM threshold below, since
+# threshold_for('BAAI/bge-small-en-v1.5') was never in merge_thresholds and
+# fell back to the GPU-tuned global 0.50. Leaving model unset lets
+# resolve() pick MiniLM on CPU and bge-small on CUDA, as designed. See
+# tests/test_embedding.py::test_shipped_feed_toml_resolves_to_the_intended_cpu_profile.
+device = "auto"
+batch_size = 256
+
+[clustering]
+window_hours = 48
+cosine_weight = 0.6
+entity_weight = 0.4
+merge_threshold = 0.50
+
+# Per-model overrides: bge-small (GPU default) and MiniLM (CPU default) sit
+# on different similarity scales, so one global merge_threshold cannot serve
+# both. sentence-transformers/all-MiniLM-L6-v2's value below is the midpoint
+# of the safe threshold band measured by tests/golden/test_golden.py
+# (band low=0.30 high=0.40 width=0.10). See feed/config.py for details.
+[clustering.merge_thresholds]
+"sentence-transformers/all-MiniLM-L6-v2" = 0.35
+
+# Spec 3.5 LLM tiering. No secrets here -- GEMINI_API_KEY comes from the
+# environment / gitignored .env, never from this file. gemini-flash-latest
+# is used deliberately over a pinned version (e.g. gemini-2.0-flash, which
+# is now dead) so a future model retirement doesn't silently break Tier 1.
+[providers]
+gemini_model = "gemini-flash-latest"
+gemini_timeout = 30.0
+claude_code_timeout = 120.0
+# Placeholder starting points per spec open questions 6/9.2 -- both need
+# tuning once a live score distribution and observed Claude Code rate
+# limits exist.
+tier2_score_cut = 0.6
+daily_budget = 20
+
+# Spec 4.1/4.4: the static bundle the Publish stage writes.
+[publish]
+out_dir = "public"
+retention_days = 90
+page_size = 50

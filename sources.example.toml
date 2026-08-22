@@ -1,0 +1,9 @@
+# sources.example.toml — feed the ids to `feed sources add`
+# arxiv:ai          plugin=arxiv            {"categories": ["cs.AI","cs.CL","cs.LG"]}
+# hn                plugin=hackernews       {"min_score": 150}
+# gh:vllm           plugin=github_releases  {"repo": "vllm-project/vllm"}
+# gh:transformers   plugin=github_releases  {"repo": "huggingface/transformers"}
+# anthropic         plugin=rss  {"url": "https://www.anthropic.com/news/rss.xml"}
+# openai            plugin=rss  {"url": "https://openai.com/blog/rss.xml"}
+# deepmind          plugin=rss  {"url": "https://deepmind.google/blog/rss.xml"}
+# hf-blog           plugin=rss  {"url": "https://huggingface.co/blog/feed.xml"}
