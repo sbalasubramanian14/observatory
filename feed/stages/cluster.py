@@ -95,7 +95,6 @@ def cluster(session: Session, cfg: ClusteringConfig, adjudicator: Adjudicator,
                 )
             ))
 
-            threshold = cfg.threshold_for(item.embedding_model_id)
             best_score, best_story_id, best_other = float("-inf"), None, None
             for other in candidates:
                 if item.published_at and other.published_at:
@@ -106,22 +105,17 @@ def cluster(session: Session, cfg: ClusteringConfig, adjudicator: Adjudicator,
                 if s > best_score:
                     best_score, best_story_id, best_other = s, other.story_id, other
 
+            # Post-review fix (Finding 1): pass the RAW blended similarity to
+            # the adjudicator, never a pre-shifted one. `pair_score` is the
+            # Adjudicator protocol's named parameter -- a future Phase-2
+            # (LLM) adjudicator, or anything that gates/logs/calibrates on
+            # this value, needs the real number, not one silently offset by
+            # a threshold it was never handed. Model-scoped thresholds
+            # (ClusteringConfig.threshold_for) belong inside the adjudicator
+            # itself -- see ThresholdAdjudicator's `threshold_for` parameter
+            # -- not smuggled in here via arithmetic on the score.
             if best_story_id is not None:
-                # Ruling 2: the adjudicator's own band is a fixed
-                # cfg.merge_threshold-centred reference (by convention, the
-                # value it is constructed with matches cfg.merge_threshold).
-                # The two embedding models this project supports have
-                # measurably different similarity scales (bge-small
-                # same-story minimum 0.695, MiniLM 0.412), so the RAW
-                # blended score cannot be compared against that fixed
-                # reference directly. Shift it so that clearing the
-                # model-scoped threshold_for() lands exactly on
-                # cfg.merge_threshold -- the adjudicator's ambiguous_band
-                # then stays meaningful (a relative margin around the
-                # effective threshold) regardless of which model produced
-                # the vectors.
-                adjusted = best_score - threshold + cfg.merge_threshold
-                verdict = adjudicator.decide(adjusted, item, best_other)
+                verdict = adjudicator.decide(best_score, item, best_other)
             else:
                 verdict = Verdict.DIFFERENT
 

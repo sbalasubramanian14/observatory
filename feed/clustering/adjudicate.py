@@ -1,6 +1,6 @@
 from __future__ import annotations
 import enum
-from typing import Protocol
+from typing import Callable, Protocol
 
 
 class Verdict(enum.Enum):
@@ -20,15 +20,37 @@ class ThresholdAdjudicator:
     for cosine alone: no single threshold cleanly divides same-story from
     different-story pairs. Scores inside the band are honestly reported as
     AMBIGUOUS rather than forced to a guess.
+
+    `threshold_for`, when given, is consulted as `threshold_for(left.embedding_model_id)`
+    to resolve the effective threshold per pair -- this is how a caller wires
+    in ClusteringConfig.threshold_for, so that model-scoped policy lives here
+    (the one object whose job is thresholds) rather than being smuggled in by
+    pre-shifting `pair_score` before it reaches `decide()`. `pair_score` is
+    always the raw, uninterpreted blended similarity: the Adjudicator protocol
+    is the seam for a future LLM adjudicator, and a value that has been
+    silently shifted by an unrelated caller is not a score that seam, or
+    anything else, could interpret, log, or calibrate against.
+
+    Falls back to `self.merge_threshold` when no `threshold_for` was given, or
+    when `left` is `None` (as in the unit tests below, which call `decide`
+    directly with synthetic floats and no items).
     """
 
-    def __init__(self, merge_threshold: float = 0.50, ambiguous_band: float = 0.06):
+    def __init__(self, merge_threshold: float = 0.50, ambiguous_band: float = 0.06,
+                 *, threshold_for: Callable[[str | None], float] | None = None):
         self.merge_threshold = merge_threshold
         self.ambiguous_band = ambiguous_band
+        self.threshold_for = threshold_for
+
+    def _effective_threshold(self, left) -> float:
+        if self.threshold_for is not None and left is not None:
+            return self.threshold_for(getattr(left, "embedding_model_id", None))
+        return self.merge_threshold
 
     def decide(self, pair_score: float, left=None, right=None) -> Verdict:
-        low = self.merge_threshold - self.ambiguous_band / 2
-        high = self.merge_threshold + self.ambiguous_band / 2
+        threshold = self._effective_threshold(left)
+        low = threshold - self.ambiguous_band / 2
+        high = threshold + self.ambiguous_band / 2
         if pair_score >= high:
             return Verdict.SAME
         if pair_score <= low:

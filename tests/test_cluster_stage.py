@@ -135,25 +135,32 @@ def test_cross_run_clustering_finds_stories_past_the_clustered_stage(session):
     assert session.query(Story).count() == 1
 
 
-# --- Ruling 2: model-scoped threshold, not a single global one ------------
+# --- Ruling 2 (post-review redesign): model-scoped threshold lives inside
+# the adjudicator, not in cluster() -----------------------------------------
 #
 # cfg.merge_thresholds maps embedding_model_id -> threshold because the two
-# supported embedding models produce different similarity scales. cluster()
-# must consult cfg.threshold_for(item.embedding_model_id), not a single
-# fixed value, or a per-model override in the config has no effect.
+# supported embedding models produce different similarity scales.
+# ThresholdAdjudicator's `threshold_for` parameter is how a caller wires
+# ClusteringConfig.threshold_for into the decision. cluster() itself passes
+# the RAW pair_score straight through to adjudicator.decide() -- it has no
+# threshold logic of its own -- so these tests wire `threshold_for` onto the
+# adjudicator at construction time, exactly as real pipeline wiring would.
 def test_high_model_threshold_blocks_a_merge_the_default_would_allow(session):
     # Under the default ClusteringConfig() (merge_threshold=0.50) this exact
     # pair merges into one story -- see
     # test_similar_items_from_two_outlets_become_one_story above. Setting a
     # near-maximum model-specific threshold for "fake/v1" must block that
-    # merge, proving cluster() actually consults the per-model value instead
-    # of the adjudicator's own fixed 0.50.
+    # merge, proving the adjudicator actually consults the per-model value
+    # instead of its own fixed 0.50.
     cfg = ClusteringConfig(merge_thresholds={"fake/v1": 1.0})
+    adjudicator = NullAdjudicator(
+        ThresholdAdjudicator(cfg.merge_threshold, 0.06, threshold_for=cfg.threshold_for)
+    )
     _seed(session, [
         ("s", "DeepSeek releases V4 open weights", _vec(1, 0, 0), 0),
         ("t", "DeepSeek V4 weights published by the lab", _vec(1, 0, 0), 1),
     ])
-    cluster(session, cfg, NullAdjudicator(ThresholdAdjudicator(0.5, 0.06)), now=NOW)
+    cluster(session, cfg, adjudicator, now=NOW)
     assert session.query(Story).count() == 2
 
 
@@ -162,14 +169,115 @@ def test_low_model_threshold_allows_a_merge_the_default_would_block(session):
     # capitalised/versioned tokens), so the blended score is well under the
     # default 0.50 threshold and these two items stay separate under the
     # default config. A very low model-specific threshold for "fake/v1"
-    # must let them merge, proving cluster() lowers the bar, not just
+    # must let them merge, proving the wiring lowers the bar, not just
     # raises it.
     cfg = ClusteringConfig(merge_thresholds={"fake/v1": 0.05})
+    adjudicator = NullAdjudicator(
+        ThresholdAdjudicator(cfg.merge_threshold, 0.06, threshold_for=cfg.threshold_for)
+    )
     _seed(session, [
         ("s", "alpha item one", _vec(1, 0, 0), 0),
         ("t", "alpha item two", _vec(0.6, 0.8, 0), 1),
     ])
-    cluster(session, cfg, NullAdjudicator(ThresholdAdjudicator(0.5, 0.06)), now=NOW)
+    cluster(session, cfg, adjudicator, now=NOW)
+    assert session.query(Story).count() == 1
+
+
+def test_threshold_for_callable_is_actually_consulted_when_given():
+    # Direct unit-level pin of the coupling (Finding 3): construct the
+    # adjudicator with a threshold_for that returns a very high value for
+    # one model id and confirm decide() uses it instead of merge_threshold,
+    # via a real Item-shaped `left` (a plain namespace with the attribute
+    # ThresholdAdjudicator reads) rather than going through cluster().
+    from types import SimpleNamespace
+
+    def threshold_for(model_id):
+        return 0.95 if model_id == "strict-model" else 0.50
+
+    adj = ThresholdAdjudicator(merge_threshold=0.50, ambiguous_band=0.06,
+                               threshold_for=threshold_for)
+    left = SimpleNamespace(embedding_model_id="strict-model")
+    other_left = SimpleNamespace(embedding_model_id="normal-model")
+
+    # 0.80 clears the default band's high edge (0.53) but not 0.95's.
+    assert adj.decide(0.80, left, None) is Verdict.DIFFERENT
+    assert adj.decide(0.80, other_left, None) is Verdict.SAME
+    # No `left` at all -> falls back to merge_threshold, matching the
+    # brief's own unit tests (decide(0.70, None, None) is SAME).
+    assert adj.decide(0.80, None, None) is Verdict.SAME
+
+
+# --- Finding 2: candidates must never cross embedding models --------------
+#
+# feed/models.py stores embedding_model_id per item because vectors from
+# different models are not comparable (spec S3.3). The candidate query in
+# cluster() filters on Item.embedding_model_id == item.embedding_model_id;
+# deleting that filter left all 14 original tests green, so it was entirely
+# unguarded. Two items with identical titles and identical raw vector bytes
+# but different embedding_model_id values must NOT be treated as candidates
+# for each other.
+def test_candidates_never_cross_embedding_models(session):
+    session.add(Source(id="s", plugin="rss", config={}, cadence_minutes=30))
+    session.add(Source(id="t", plugin="rss", config={}, cadence_minutes=30))
+    session.add(Item(source_id="s", url="http://x/0", url_hash="h0",
+                     title="DeepSeek releases V4", text="DeepSeek releases V4",
+                     embedding=_vec(1, 0, 0), embedding_model_id="model-a",
+                     published_at=NOW, stage=Stage.EMBEDDED))
+    session.add(Item(source_id="t", url="http://x/1", url_hash="h1",
+                     title="DeepSeek releases V4", text="DeepSeek releases V4",
+                     embedding=_vec(1, 0, 0), embedding_model_id="model-b",
+                     published_at=NOW + timedelta(hours=1), stage=Stage.EMBEDDED))
+    session.commit()
+    cluster(session, ClusteringConfig(), NullAdjudicator(ThresholdAdjudicator(0.5, 0.06)), now=NOW)
+    assert session.query(Story).count() == 2
+
+
+# --- Validation of the redesign: AMBIGUOUS resolves to DIFFERENT through --
+# the real cluster() call path, not just the isolated adjudicator unit test.
+#
+# The score reaching decide() is now the raw pair_score (no shift), so this
+# reconfirms, through the actual stage rather than a synthetic float, that a
+# pair whose real blended similarity lands inside the ambiguous band still
+# ends up split when adjudicated by NullAdjudicator.
+class _AlwaysSame:
+    """Test double proving the pair below is a genuine clustering candidate
+    (passes the time window and embedding-model filters) and would merge if
+    the adjudicator allowed it -- i.e. the split in the test below is caused
+    specifically by the AMBIGUOUS-to-DIFFERENT resolution, not by the pair
+    failing to become a candidate for some unrelated reason."""
+
+    def decide(self, pair_score, left=None, right=None):
+        return Verdict.SAME
+
+
+def test_ambiguous_pair_resolves_to_different_through_the_real_stage(session):
+    # "bravo item one" / "bravo item two" share no capitalised/versioned
+    # entities, so the blend is pure cosine * time_proximity. Vector chosen
+    # (confirmed empirically -- see task-11-report.md) so raw pair_score is
+    # ~0.4994, inside the default [0.47, 0.53) ambiguous band with margin
+    # from both edges.
+    _seed(session, [
+        ("s", "bravo item one", _vec(1, 0, 0), 0),
+        ("t", "bravo item two", _vec(0.85, 0.5268, 0), 1),
+    ])
+    cluster(session, ClusteringConfig(), NullAdjudicator(ThresholdAdjudicator(0.5, 0.06)), now=NOW)
+    assert session.query(Story).count() == 2, (
+        "an ambiguous-scoring pair must split, not merge, under NullAdjudicator"
+    )
+
+
+def test_ambiguous_pair_would_have_merged_under_a_permissive_adjudicator(session):
+    # Non-vacuity check for the test above: the identical scenario, scored
+    # by an adjudicator that always says SAME, merges into one story. This
+    # confirms the pair is a real candidate (correct model id, inside the
+    # time window) and that NullAdjudicator's split above is caused by the
+    # ambiguous-to-DIFFERENT resolution, not by the pair never reaching
+    # adjudication at all.
+    _seed(session, [
+        ("s", "bravo item one", _vec(1, 0, 0), 0),
+        ("t", "bravo item two", _vec(0.85, 0.5268, 0), 1),
+    ])
+    cluster(session, ClusteringConfig(), _AlwaysSame(), now=NOW)
     assert session.query(Story).count() == 1
 
 
