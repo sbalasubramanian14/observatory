@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from feed.clustering.adjudicate import Adjudicator, Verdict
 from feed.clustering.entities import extract_entities
@@ -87,10 +87,36 @@ def cluster(session: Session, cfg: ClusteringConfig, adjudicator: Adjudicator,
             # pipeline run, silently breaking cross-run clustering forever.
             # The embedding_model_id filter stays: vectors from different
             # models are not comparable.
+            #
+            # C1 fix: `Item.published_at >= cutoff` alone silently drops any
+            # candidate with published_at IS NULL, because SQL's NULL >= x
+            # evaluates to NULL, which WHERE treats as false. RSS entries
+            # with no pubDate, HN records with no `time`, and GitHub
+            # releases with no updated/published timestamp all produce
+            # undated items, and once such an item joined a story, it
+            # became permanently invisible as a candidate -- not just to
+            # itself, but forever, since the predicate is evaluated on the
+            # candidate row regardless of which item is being matched.
+            #
+            # An undated candidate is deliberately let through with NO time
+            # filtering at all, rather than treated as "outside the
+            # window": we have no date to compare against, and the
+            # in-Python guard just below (`if item.published_at and
+            # other.published_at`) already reflects that same choice -- it
+            # skips the time_proximity decay entirely for a pair where
+            # either side lacks a date, instead of penalising or excluding
+            # it. Silently treating "no date" as "outside the window" would
+            # just be the C1 bug again in different clothes.
+            #
+            # This does NOT turn off time filtering for dated items: a
+            # dated candidate still must satisfy published_at >= cutoff.
+            # Only the unknown-date case is exempted, so the candidate set
+            # only grows by the (expected to be small) share of items with
+            # no date at all -- not by every item ever clustered.
             candidates = list(session.scalars(
                 select(Item).where(
                     Item.story_id.is_not(None),
-                    Item.published_at >= cutoff,
+                    or_(Item.published_at >= cutoff, Item.published_at.is_(None)),
                     Item.embedding_model_id == item.embedding_model_id,
                 )
             ))

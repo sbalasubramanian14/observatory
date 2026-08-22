@@ -18,10 +18,14 @@ def _seed(session, rows):
     session.add(Source(id="s", plugin="rss", config={}, cadence_minutes=30))
     session.add(Source(id="t", plugin="rss", config={}, cadence_minutes=30))
     for i, (src, title, vec, offset) in enumerate(rows):
+        # offset=None means "undated" -- published_at stays NULL, exactly
+        # like an RSS entry with no pubDate, an HN record with no `time`,
+        # or a GitHub release with no updated/published timestamp.
+        published = NOW + timedelta(hours=offset) if offset is not None else None
         session.add(Item(source_id=src, url=f"http://x/{i}", url_hash=f"h{i}",
                          title=title, text=title, embedding=vec,
                          embedding_model_id="fake/v1",
-                         published_at=NOW + timedelta(hours=offset),
+                         published_at=published,
                          stage=Stage.EMBEDDED))
     session.commit()
 
@@ -309,6 +313,72 @@ def test_story_updated_at_reflects_newest_member_published_at_not_now(session):
     story = session.query(Story).one()
     assert story.updated_at == NOW + timedelta(hours=5)
     assert story.updated_at != NOW
+
+
+# --- C1: undated items must still be able to cluster -----------------------
+#
+# cluster()'s candidate query filtered on `Item.published_at >= cutoff`. In
+# SQL, comparing NULL against anything (including `>=`) evaluates to NULL,
+# which is falsy in a WHERE clause -- so an item with published_at IS NULL
+# was silently excluded from the candidate set no matter how similar it was
+# to an already-clustered item, AND, once its own turn came around as
+# `item` (candidates are queried freshly per item, not filtered on the
+# outer item's date), any dated item already in a story was invisible to
+# it too, because the predicate is on the CANDIDATE row regardless of which
+# item is being matched. Two items that both lack a date could therefore
+# never merge with anything, forever, even at blended similarity 0.978.
+#
+# The in-Python guard just below in cluster() (`if item.published_at and
+# other.published_at: ... apply time_proximity ...`) already tolerates an
+# undated pair by skipping the decay multiplier entirely -- i.e. the
+# intended semantics are "an item with no date is never penalised or
+# excluded on time grounds, because we have no time information to filter
+# on". The SQL predicate silently overrode that intent for the candidate
+# set itself. These tests seed items with offset=None (published_at IS
+# NULL) and prove they can still become candidates and merge.
+def test_two_undated_items_still_merge(session):
+    _seed(session, [
+        ("s", "DeepSeek releases V4 open weights", _vec(1, 0, 0), None),
+        ("t", "DeepSeek V4 weights published by the lab", _vec(1, 0, 0), None),
+    ])
+    res = cluster(session, ClusteringConfig(),
+                  NullAdjudicator(ThresholdAdjudicator(0.5, 0.06)), now=NOW)
+    assert res.processed == 2
+    stories = session.query(Story).all()
+    assert len(stories) == 1
+    assert stories[0].item_count == 2
+
+
+def test_an_undated_item_still_clusters_with_a_dated_item(session):
+    # Order matters for reproducing the actual bug: the UNDATED item is
+    # seeded (and therefore clustered) FIRST, so it is already a Story
+    # member -- and therefore a CANDIDATE row with published_at IS NULL --
+    # by the time the dated item is processed and queries for candidates.
+    # `Item.published_at >= cutoff` on that candidate row is SQL NULL,
+    # which is falsy, so the buggy query drops it silently.
+    _seed(session, [
+        ("s", "DeepSeek V4 weights published by the lab", _vec(1, 0, 0), None),
+        ("t", "DeepSeek releases V4 open weights", _vec(1, 0, 0), 0),
+    ])
+    res = cluster(session, ClusteringConfig(),
+                  NullAdjudicator(ThresholdAdjudicator(0.5, 0.06)), now=NOW)
+    assert res.processed == 2
+    stories = session.query(Story).all()
+    assert len(stories) == 1
+    assert stories[0].item_count == 2
+
+
+def test_undated_items_do_not_widen_the_candidate_set_for_dated_items(session):
+    # A dated item well outside the time window must still be excluded from
+    # a dated item's candidates, even though undated candidates now bypass
+    # the cutoff -- the fix must not turn off time filtering altogether.
+    _seed(session, [
+        ("s", "DeepSeek releases V4", _vec(1, 0, 0), 0),
+        ("t", "DeepSeek releases V4", _vec(1, 0, 0), 200),   # far outside 48h
+    ])
+    cluster(session, ClusteringConfig(window_hours=48),
+            NullAdjudicator(ThresholdAdjudicator(0.5, 0.06)), now=NOW)
+    assert session.query(Story).count() == 2
 
 
 # --- Ruling 3: corrupt (non-finite) embeddings fail visibly ---------------
