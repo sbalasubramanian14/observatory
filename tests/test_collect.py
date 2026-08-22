@@ -56,3 +56,92 @@ def test_broken_source_is_recorded_and_does_not_raise(session):
     src = session.get(Source, "bad")
     assert src.consecutive_failures == 1
     assert src.last_error is not None
+
+
+# --- I7: a DB error during the item-insert loop or commit must isolate ----
+# just that source, not abort the whole collect() run --------------------
+#
+# Only fetch() was inside the original try -- the item-insert loop and both
+# commits sat outside it, so a DB error there (e.g. a full disk, a
+# constraint violation, any commit() failure) escaped collect() entirely
+# and aborted every other still-due source in the same run. Spec S3.1
+# requires per-source isolation. This mutates session.commit() to fail on
+# whichever source's commit call happens first (regardless of iteration
+# order), and proves the OTHER source is still fully collected in the same
+# collect() call.
+def test_db_error_during_item_insert_isolates_that_source_from_others(session, monkeypatch):
+    _add_source(session, id="a", config={"path": str(FIX)})
+    _add_source(session, id="b", config={"path": str(FIX)})
+
+    real_commit = session.commit
+    calls = {"n": 0}
+
+    def flaky_commit():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("db exploded during item insert")
+        return real_commit()
+
+    monkeypatch.setattr(session, "commit", flaky_commit)
+
+    res = collect(session, now=NOW)  # must not raise
+
+    assert len(res.source_errors) == 1
+    failed_id = next(iter(res.source_errors))
+    ok_id = "a" if failed_id == "b" else "b"
+    assert failed_id in ("a", "b") and ok_id in ("a", "b") and failed_id != ok_id
+
+    ok_src = session.get(Source, ok_id)
+    assert ok_src.consecutive_failures == 0
+    assert ok_src.last_run_at == NOW
+    assert session.query(Item).filter_by(source_id=ok_id).count() == 2, (
+        "the source processed after the failing one must still be fully "
+        "collected in the SAME collect() call, not skipped or partial"
+    )
+
+    bad_src = session.get(Source, failed_id)
+    assert bad_src.consecutive_failures == 1
+    assert bad_src.last_error is not None
+    assert session.query(Item).filter_by(source_id=failed_id).count() == 0, (
+        "the failing source's partial inserts must be rolled back, not "
+        "left half-committed"
+    )
+
+
+# --- Required test 1: source health -----------------------------------
+#
+# Both behaviours below are correct in today's collect() but had zero
+# committed coverage before this change; spec S4.2 makes source health
+# (consecutive_failures, `feed sources list`'s "FAILING x{n}" state)
+# load-bearing.
+def test_consecutive_failures_resets_to_zero_on_a_later_success(session):
+    _add_source(session, id="flaky", config={"path": "/nonexistent.xml"})
+    collect(session, now=NOW)
+    src = session.get(Source, "flaky")
+    assert src.consecutive_failures == 1
+    assert src.last_error is not None
+
+    # Operator repairs the source; the next cadence-eligible run succeeds.
+    src.config = {"path": str(FIX)}
+    session.commit()
+    res = collect(session, now=NOW + timedelta(minutes=31))
+
+    src = session.get(Source, "flaky")
+    assert src.consecutive_failures == 0
+    assert src.last_error is None
+    assert res.new_items == 2
+
+
+def test_cross_source_url_hash_collision_dedupes(session):
+    # The same article URL arriving via two different sources (e.g. an RSS
+    # mirror and a source republishing the same canonical link) must dedupe
+    # on url_hash regardless of which source it came from -- the exists
+    # check in collect() is not scoped by source_id.
+    _add_source(session, id="a", config={"path": str(FIX)})
+    _add_source(session, id="b", config={"path": str(FIX)})
+
+    res = collect(session, now=NOW)
+
+    assert res.new_items == 2            # only the first-processed source's items are new
+    assert res.skipped_duplicates == 2   # the other source's identical URLs dedupe
+    assert session.query(Item).count() == 2
