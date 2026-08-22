@@ -39,6 +39,38 @@ def _fetch_remote_text(url: str) -> str:
     return trafilatura.extract(downloaded) or ""
 
 
+def _html_to_text(html: str) -> str:
+    """Strip markup from an RSS/Atom summary using trafilatura, not a regex.
+
+    I4 fix: `_extract` used to only whitespace-collapse item.summary, so a
+    real RSS description like
+    '<p>OpenAI <a href="...">announced</a> GPT-6...</p>' was stored
+    verbatim in item.text, polluting content_hash, the embedding text, and
+    entity extraction (a stray hostname or CSS class value inside an
+    attribute reads as a spurious capitalised "entity"). A hand-rolled
+    regex HTML stripper is its own bug farm (nested tags, entities,
+    malformed markup), so this reuses trafilatura -- already a project
+    dependency for the network-fallback path below -- instead.
+
+    trafilatura.extract() silently returns None for a bare fragment with no
+    <html>/<body> wrapper, regardless of content length or quality (verified
+    empirically), which would otherwise make every RSS summary look like
+    "no usable text". Wrapping guarantees it sees something that looks like
+    a real document without changing the content itself. favor_recall=True
+    keeps short, low-boilerplate fragments (typical of a one-paragraph
+    summary) from being discarded as insufficiently substantial.
+
+    Falls back to the previous whitespace-collapse behaviour if trafilatura
+    still returns nothing (e.g. a summary that is pure junk) -- degrading to
+    the old behaviour is better than losing the text entirely.
+    """
+    import trafilatura
+
+    extracted = trafilatura.extract(f"<html><body>{html}</body></html>",
+                                    favor_recall=True)
+    return _WS.sub(" ", extracted if extracted else html).strip()
+
+
 def _extract(item: Item) -> str:
     """Prefer the summary the source gave us; fall back to fetching the page.
 
@@ -48,7 +80,7 @@ def _extract(item: Item) -> str:
     considering the fetch fallback -- refetching arXiv HTML adds nothing.
     """
     if item.summary and len(item.summary.strip()) >= MIN_TEXT_CHARS:
-        return _WS.sub(" ", item.summary).strip()
+        return _html_to_text(item.summary)
     if item.url.startswith("https://arxiv.org/abs/"):
         return ""
     return _WS.sub(" ", _fetch_remote_text(item.url)).strip()

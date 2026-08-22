@@ -106,6 +106,68 @@ def test_arxiv_item_with_empty_summary_fails_without_reaching_fetch_seam(session
         normalize_item(session, item)
 
 
+def test_html_summary_is_stripped_to_plain_text(session):
+    """I4: _extract only whitespace-collapsed item.summary; trafilatura ran
+    only on the network-fallback path. Real RSS descriptions are HTML, so
+    markup was stored verbatim in item.text, polluting content_hash, the
+    embedding text, and entity extraction. This proves the summary path now
+    goes through trafilatura's HTML-to-text extraction, not a regex.
+    """
+    html = ('<p>OpenAI <a href="https://openai.com/index/gpt-6">announced</a> '
+            'GPT-6 today.</p>')
+    item = _seed(session, url_hash="h6", url="https://example.com/gpt6",
+                title="OpenAI announces GPT-6", summary=html)
+    normalize_item(session, item)
+    session.commit()
+
+    assert "<p>" not in item.text
+    assert "<a " not in item.text
+    assert "href" not in item.text
+    assert item.text == "OpenAI announced GPT-6 today."
+
+
+def test_stripped_html_improves_entity_extraction(session):
+    """I4: confirm the fix actually improves the downstream signal it was
+    supposed to protect, not just "looks cleaner". Raw HTML smuggles
+    spurious "entities" out of tag attributes -- a hostname and a CSS class
+    value that never appeared in the article's visible text -- into
+    extract_entities()'s cheap capitalised-token heuristic. The stripped
+    text must not contain them, while still containing the genuine ones.
+    """
+    from feed.clustering.entities import extract_entities
+
+    html = ('<p>OpenAI <a href="https://Example.com/GPT-6-Launch" '
+            'class="TrackingLink">announced</a> GPT-6 today.</p>')
+    item = _seed(session, url_hash="h7", url="https://example.com/gpt6-2",
+                title="", summary=html)
+    normalize_item(session, item)
+    session.commit()
+
+    raw_entities = extract_entities(html)
+    clean_entities = extract_entities(item.text)
+
+    assert "example.com" in raw_entities
+    assert "trackinglink" in raw_entities
+    assert "example.com" not in clean_entities
+    assert "trackinglink" not in clean_entities
+    assert "openai" in clean_entities
+    assert "gpt-6" in clean_entities
+
+
+def test_plain_text_summary_with_no_markup_still_normalizes(session):
+    """Non-regression: a summary that is already plain text (no HTML at
+    all) -- the common case for e.g. arXiv abstracts and many RSS feeds --
+    must still normalize correctly through the new HTML-to-text path, not
+    just when there happens to be markup to strip.
+    """
+    item = _seed(session, url_hash="h8", url="https://example.com/plain",
+                title="Plain summary item",
+                summary="A perfectly ordinary plain-text summary, no markup at all.")
+    normalize_item(session, item)
+    session.commit()
+    assert item.text == "A perfectly ordinary plain-text summary, no markup at all."
+
+
 def test_non_arxiv_empty_summary_uses_fetch_seam_not_real_network(session, monkeypatch):
     """Risk 3 + the critical network-seam risk: a non-arXiv URL with an
     empty summary DOES take the fallback-fetch path. Prove that path goes
