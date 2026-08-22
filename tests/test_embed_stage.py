@@ -1,5 +1,5 @@
 import numpy as np
-from feed.embedding.base import unpack
+from feed.embedding.base import pack as real_pack, unpack
 from feed.models import Item, Source, Stage
 from feed.stages.embed import embed
 
@@ -145,3 +145,63 @@ def test_batch_failure_with_every_item_bad_marks_all_failed_without_looping(sess
     assert all("bad row" in i.error for i in items)
     assert emb.batch_calls == 1
     assert emb.single_calls == 3
+
+
+def test_pack_failure_in_fallback_isolates_the_row_and_others_still_embed(session, monkeypatch):
+    """Reviewer finding: _embed_one's try only wrapped encode(); pack()/commit()
+    failures escaped _embed_one, the batch loop, and embed() itself. This
+    proves the whole per-item operation is now covered: encode succeeds for
+    every item (trigger never matches), but pack() is made to blow up on the
+    second item only."""
+    _seed(session, n=3)
+    emb = OneBadItemEmbedder(trigger="__never_matches__")
+
+    calls = {"n": 0}
+
+    def flaky_pack(vec):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("corrupt vector shape")
+        return real_pack(vec)
+
+    monkeypatch.setattr("feed.stages.embed.pack", flaky_pack)
+
+    res = embed(session, emb)
+
+    assert res.processed == 2
+    assert res.failed == 1
+    items = session.query(Item).order_by(Item.id).all()
+    assert items[0].stage is Stage.EMBEDDED
+    assert items[1].stage is Stage.FAILED
+    assert "corrupt vector shape" in items[1].error
+    assert items[2].stage is Stage.EMBEDDED
+
+
+def test_commit_failure_in_fallback_isolates_the_row_and_others_still_embed(session, monkeypatch):
+    """Same finding, but for the session.commit() half of the uncovered
+    success path. The second item's success-path commit raises; that must
+    be caught, rolled back, and turned into a FAILED row -- not escape
+    embed() entirely and leave the third item unattempted."""
+    _seed(session, n=3)
+    emb = OneBadItemEmbedder(trigger="__never_matches__")
+
+    calls = {"n": 0}
+    real_commit = session.commit
+
+    def flaky_commit():
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("disk full")
+        return real_commit()
+
+    monkeypatch.setattr(session, "commit", flaky_commit)
+
+    res = embed(session, emb)
+
+    assert res.processed == 2
+    assert res.failed == 1
+    items = session.query(Item).order_by(Item.id).all()
+    assert items[0].stage is Stage.EMBEDDED
+    assert items[1].stage is Stage.FAILED
+    assert "disk full" in items[1].error
+    assert items[2].stage is Stage.EMBEDDED

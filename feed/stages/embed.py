@@ -18,29 +18,44 @@ def embed_text_for(item: Item) -> str:
     return f"{item.title}\n\n{item.text or ''}".strip()
 
 
-def _embed_one(session: Session, embedder: Embedder, item: Item, result: StageResult) -> None:
-    """Fallback path: encode a single item, isolating its failure.
+def _embed_one(session: Session, embedder: Embedder, item_id: int, result: StageResult) -> None:
+    """Fallback path: encode and persist a single item, isolating its failure.
 
     Only reached after the batched call above already raised, so this is
     off the hot path deliberately -- see the module docstring rationale in
     the task-9 report for why a batch failure must not condemn every row
     in the batch to a terminal Stage.FAILED.
+
+    The try covers the *entire* per-item operation -- encode, pack, and
+    commit -- not just encode(). A failure in pack() (e.g. a malformed
+    vector shape) or in commit() (e.g. a constraint violation or full disk)
+    must be caught here exactly like an encode() failure, or it escapes
+    this function, the calling loop, and embed() itself, leaving every
+    later item in the batch unattempted with no StageResult returned.
+    Mirrors feed.stages.base.run_stage: on failure, roll back and re-fetch
+    the item by id before writing the FAILED state, since a raised
+    commit() can leave the in-memory object's pending changes rolled back
+    and the object expired.
     """
+    item = session.get(Item, item_id)
     try:
         vec = embedder.encode([embed_text_for(item)])[0]
-    except Exception as exc:
-        item.stage = Stage.FAILED
-        item.error = f"embedding failed: {type(exc).__name__}: {exc}"
-        session.commit()
-        result.failed += 1
-        result.errors.append((item.id, str(exc)))
-        log.warning("embed item=%s failed: %s", item.id, exc)
-    else:
         item.embedding = pack(vec)
         item.embedding_model_id = embedder.model_id
         item.stage = Stage.EMBEDDED
         item.error = None
         session.commit()
+    except Exception as exc:
+        session.rollback()
+        fresh = session.get(Item, item_id)
+        if fresh is not None:
+            fresh.stage = Stage.FAILED
+            fresh.error = f"embedding failed: {type(exc).__name__}: {exc}"
+            session.commit()
+        result.failed += 1
+        result.errors.append((item_id, str(exc)))
+        log.warning("embed item=%s failed: %s", item_id, exc)
+    else:
         result.processed += 1
 
 
@@ -67,7 +82,7 @@ def embed(session: Session, embedder: Embedder, limit: int = 256) -> StageResult
             len(items), exc,
         )
         for item in items:
-            _embed_one(session, embedder, item, result)
+            _embed_one(session, embedder, item.id, result)
         return result
 
     for item, vec in zip(items, vectors):
