@@ -32,6 +32,9 @@ from feed.stages.normalize import normalize
 from feed.stages.publish import publish
 from feed.stages.score import score_stories
 from feed.stages.sync import sync_sources
+from feed.doctor import run_doctor
+from feed.pipeline import DEFAULT_ALMANAC_DIR, DEFAULT_ALMANAC_REPO, DEFAULT_KEEP_LOGS, \
+    DEFAULT_STAGE_TIMEOUT, run_pipeline
 
 log = logging.getLogger(__name__)
 
@@ -319,6 +322,37 @@ def cmd_publish(args, cfg: Config) -> int:
     return 0
 
 
+def cmd_pipeline(args, cfg: Config) -> int:
+    """The one-click entry point (spec Phase F): sources sync -> run ->
+    enrich -> publish -> push the bundle to observatory-almanac. See
+    feed.pipeline.run_pipeline for the failure policy and PIPELINE-CLI.md
+    for the exit code contract. This is what scripts/run-pipeline.ps1 (and
+    therefore observatory.bat / the scheduled task) actually invokes.
+    """
+    result = run_pipeline(
+        config=args.config,
+        cwd=Path.cwd(),
+        catalogue=args.catalogue,
+        out_dir=args.out,
+        logs_dir=args.logs_dir,
+        keep_logs=args.keep_logs,
+        almanac_dir=args.almanac_dir,
+        almanac_repo=args.almanac_repo,
+        skip_almanac_push=args.skip_almanac_push,
+        stage_timeout=args.stage_timeout,
+    )
+    return result.exit_code
+
+
+def cmd_doctor(args, cfg: Config) -> int:
+    """Preflight diagnosis (spec Phase F): what turns "it didn't work" into
+    a diagnosis. See feed.doctor.run_doctor for the individual checks.
+    """
+    report = run_doctor(cfg, probe_providers=not args.no_probe)
+    report.print(file=sys.stdout)
+    return 0 if report.ok else 1
+
+
 def cmd_backfill_images(args, cfg: Config) -> int:
     """One-off (but safely re-runnable) sweep of the existing corpus for
     items that never got a chance at the og:image fallback -- specifically
@@ -423,6 +457,33 @@ def build_parser() -> argparse.ArgumentParser:
     publish_p.add_argument("--out", type=Path, default=None,
                            help="bundle output directory (default: [publish].out_dir)")
     publish_p.set_defaults(func=cmd_publish)
+
+    pipeline_p = sub.add_parser(
+        "pipeline",
+        help="one-click run: sources sync -> run -> enrich -> publish -> push to observatory-almanac",
+    )
+    pipeline_p.add_argument("--catalogue", type=Path, default=None,
+                            help="path to the source catalogue TOML (default: sources.catalogue.toml)")
+    pipeline_p.add_argument("--out", type=Path, default=None,
+                            help="bundle output directory (default: [publish].out_dir)")
+    pipeline_p.add_argument("--logs-dir", type=Path, default=None,
+                            help="directory for timestamped run logs (default: ./logs)")
+    pipeline_p.add_argument("--keep-logs", type=int, default=DEFAULT_KEEP_LOGS,
+                            help=f"number of past run logs to retain (default: {DEFAULT_KEEP_LOGS})")
+    pipeline_p.add_argument("--almanac-dir", type=Path, default=None,
+                            help="local clone of the almanac repo (default: ./.cache/observatory-almanac)")
+    pipeline_p.add_argument("--almanac-repo", default=DEFAULT_ALMANAC_REPO,
+                            help=f"GitHub repo the bundle is pushed to (default: {DEFAULT_ALMANAC_REPO})")
+    pipeline_p.add_argument("--skip-almanac-push", action="store_true",
+                            help="run every stage but do not push to the almanac repo")
+    pipeline_p.add_argument("--stage-timeout", type=float, default=DEFAULT_STAGE_TIMEOUT,
+                            help=f"per-stage subprocess timeout in seconds (default: {DEFAULT_STAGE_TIMEOUT:.0f})")
+    pipeline_p.set_defaults(func=cmd_pipeline)
+
+    doctor_p = sub.add_parser("doctor", help="preflight: diagnose why the pipeline isn't working")
+    doctor_p.add_argument("--no-probe", action="store_true",
+                          help="skip live network probes of each LLM provider (key-presence check only)")
+    doctor_p.set_defaults(func=cmd_doctor)
 
     backfill_p = sub.add_parser(
         "backfill-images",

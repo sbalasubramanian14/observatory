@@ -33,3 +33,11 @@ IMPLEMENTATION-TRACKER.md
 *.jpeg
 *.jpg
 WhatsApp*
+
+# One-click pipeline (Phase F): timestamped run logs and the lock file
+# live here (feed/pipeline.py) -- operational artifacts, not source.
+/logs/
+# Local working clone of the observatory-almanac repo that `feed pipeline`
+# pushes the bundle to (feed/pipeline.py DEFAULT_ALMANAC_DIR) -- a git
+# checkout nested inside this repo, never itself committed here.
+/.cache/
