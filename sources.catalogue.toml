@@ -1,0 +1,339 @@
+# sources.catalogue.toml
+#
+# The checked-in list of every source this pipeline runs. `feed sources
+# sync` reconciles the `source` table against this file -- add, edit, or
+# remove a [[source]] block and re-run sync; that IS the operation. This
+# replaces ad-hoc `feed sources add` calls (still available for one-off
+# experiments, but no longer the source of truth).
+#
+# Every URL below was verified with a real HTTP request (curl) before
+# being added here -- see .superpowers/sdd/phaseC-report.md for the full
+# verification log, including every URL that was TRIED and did NOT work
+# (six Anthropic RSS guesses, Cohere, Stability AI, four of seven Chinese
+# labs, Groq, Cerebras, SemiAnalysis (429-blocked), Stanford HAI, and
+# more). Do not re-guess those; the report has the list.
+#
+# territory is one of: research | industry | policy | infrastructure
+# (spec 2's four coverage areas -- this catalogue is what closes the
+# "policy and infrastructure are entirely uncovered" gap).
+#
+# Authority scheme (see phaseC-report.md for the full rationale): 0.85-0.9
+# for a frontier lab's or a primary government body's own official
+# channel; 0.7-0.8 for a respected-but-secondary primary source (smaller
+# labs, official-but-marketing-flavored company blogs, thinner official
+# feeds); 0.55-0.7 for trade press, PR/investor-relations feeds, and
+# thin/sparse primary feeds; 0.4-0.55 for aggregators and general-purpose
+# feeds with a lot of non-AI noise mixed in.
+
+# =============================================================================
+# Research / industry aggregators (pre-existing, Phase 1)
+# =============================================================================
+
+[[source]]
+id = "arxiv:ai"
+plugin = "arxiv"
+territory = "research"
+cadence_minutes = 180
+authority = 0.8
+config = { categories = ["cs.AI", "cs.CL", "cs.LG"], max_results = 60 }
+
+[[source]]
+id = "hn"
+plugin = "hackernews"
+territory = "industry"
+cadence_minutes = 30
+authority = 0.5
+config = { min_score = 150, limit = 60 }
+
+[[source]]
+id = "gh:vllm"
+plugin = "github_releases"
+territory = "research"
+cadence_minutes = 360
+authority = 0.7
+config = { repo = "vllm-project/vllm" }
+
+[[source]]
+id = "gh:transformers"
+plugin = "github_releases"
+territory = "research"
+cadence_minutes = 360
+authority = 0.7
+config = { repo = "huggingface/transformers" }
+
+[[source]]
+id = "hf:blog"
+plugin = "rss"
+territory = "research"
+cadence_minutes = 120
+authority = 0.7
+config = { url = "https://huggingface.co/blog/feed.xml" }
+
+[[source]]
+id = "openai"
+plugin = "rss"
+territory = "industry"
+cadence_minutes = 120
+authority = 0.9
+config = { url = "https://openai.com/news/rss.xml" }
+
+[[source]]
+id = "techcrunch"
+plugin = "rss"
+territory = "industry"
+cadence_minutes = 60
+authority = 0.6
+config = { url = "https://techcrunch.com/category/artificial-intelligence/feed/" }
+
+[[source]]
+id = "theverge"
+plugin = "rss"
+territory = "industry"
+cadence_minutes = 60
+authority = 0.6
+config = { url = "https://www.theverge.com/rss/index.xml" }
+
+[[source]]
+id = "venturebeat"
+plugin = "rss"
+territory = "industry"
+cadence_minutes = 60
+authority = 0.5
+config = { url = "https://venturebeat.com/category/ai/feed/" }
+
+[[source]]
+id = "arstechnica"
+plugin = "rss"
+territory = "industry"
+cadence_minutes = 60
+authority = 0.7
+config = { url = "https://feeds.arstechnica.com/arstechnica/technology-lab" }
+
+[[source]]
+id = "marktechpost"
+plugin = "rss"
+territory = "industry"
+cadence_minutes = 60
+authority = 0.4
+config = { url = "https://www.marktechpost.com/feed/" }
+
+# =============================================================================
+# Anthropic -- ScraperSource proving ground.
+#
+# No RSS feed exists: https://www.anthropic.com/news/rss.xml,
+# /rss.xml, /rss, /news.rss, /feed, /feed.xml all verified 404
+# (curl, 2026-08-22). www.anthropic.com/news is server-rendered (not
+# JS-only), so it is genuinely scrapable -- verified live: the
+# "PublicationList" chronological item list on that page yields 10 items
+# per load. robots.txt (www.anthropic.com/robots.txt) is "Allow: /" for
+# all agents, so scraping is compliant.
+# =============================================================================
+
+[[source]]
+id = "anthropic"
+plugin = "scraper"
+territory = "industry"
+cadence_minutes = 180
+authority = 0.9
+config = { url = "https://www.anthropic.com/news", item_selector = 'a[class*="PublicationList"][class*="listItem"]', title_selector = '[class*="title"]', date_selector = "time" }
+
+# =============================================================================
+# Labs -- Western
+# =============================================================================
+
+[[source]]
+id = "deepmind"
+plugin = "rss"
+territory = "research"
+cadence_minutes = 180
+authority = 0.9
+config = { url = "https://deepmind.google/blog/rss.xml" }
+
+[[source]]
+id = "google_research"
+plugin = "rss"
+territory = "research"
+cadence_minutes = 180
+authority = 0.85
+config = { url = "https://research.google/blog/rss/" }
+
+[[source]]
+id = "google_ai"
+plugin = "rss"
+territory = "industry"
+cadence_minutes = 120
+authority = 0.7
+config = { url = "https://blog.google/technology/ai/rss/" }
+
+[[source]]
+id = "meta_research"
+plugin = "rss"
+territory = "research"
+cadence_minutes = 180
+authority = 0.85
+config = { url = "https://research.facebook.com/feed/" }
+
+[[source]]
+id = "msr"
+plugin = "rss"
+territory = "research"
+cadence_minutes = 180
+authority = 0.85
+config = { url = "https://www.microsoft.com/en-us/research/feed/" }
+
+[[source]]
+id = "mistral"
+plugin = "rss"
+territory = "industry"
+cadence_minutes = 120
+authority = 0.8
+config = { url = "https://mistral.ai/rss.xml" }
+
+[[source]]
+id = "ai2"
+plugin = "rss"
+territory = "research"
+cadence_minutes = 180
+authority = 0.75
+config = { url = "https://allenai.org/rss.xml" }
+
+[[source]]
+id = "nvidia_research"
+plugin = "rss"
+territory = "research"
+cadence_minutes = 180
+authority = 0.75
+config = { url = "https://research.nvidia.com/rss.xml" }
+
+# Cohere and Stability AI: no working RSS feed found after multiple
+# guesses (cohere.com/{blog,news}/rss.xml, /feed, txt.cohere.com/rss/,
+# docs.cohere.com/blog/rss.xml; stability.ai/{rss.xml,feed,news?format=rss})
+# -- every one either 404s or returns the marketing HTML page instead of a
+# feed. Not added. See phaseC-report.md.
+
+# =============================================================================
+# China -- most labs publish only on Chinese platforms with no discoverable
+# RSS feed (deepseek.com, qwenlm.github.io, moonshot.cn, kimi.moonshot.cn,
+# zhipuai.cn, z.ai, minimaxi.com, 01.ai, baichuan-ai.com: every guessed
+# feed URL either 404s or returns HTML, not a feed -- see phaseC-report.md).
+# github_releases against each lab's own GitHub org is the fallback that
+# actually verified real, parseable, non-empty feeds for three of seven.
+# The other four (Moonshot/Kimi, Zhipu/GLM, MiniMax, Baichuan) have public
+# repos whose releases.atom parses fine but currently has ZERO entries
+# (no GitHub Releases published) -- not added, per "do not fake coverage".
+# =============================================================================
+
+[[source]]
+id = "deepseek"
+plugin = "github_releases"
+territory = "research"
+cadence_minutes = 360
+authority = 0.7
+config = { repo = "deepseek-ai/DeepSeek-V3" }
+
+[[source]]
+id = "qwen"
+plugin = "github_releases"
+territory = "research"
+cadence_minutes = 360
+authority = 0.6
+config = { repo = "QwenLM/Qwen-Agent" }
+
+[[source]]
+id = "01ai"
+plugin = "github_releases"
+territory = "research"
+cadence_minutes = 360
+authority = 0.5
+config = { repo = "01-ai/Yi" }
+
+# =============================================================================
+# Policy
+# =============================================================================
+
+[[source]]
+id = "uk_aisi"
+plugin = "rss"
+territory = "policy"
+cadence_minutes = 240
+authority = 0.85
+config = { url = "https://www.gov.uk/government/organisations/ai-safety-institute.atom" }
+
+[[source]]
+id = "eu_digital_strategy"
+plugin = "rss"
+territory = "policy"
+cadence_minutes = 240
+authority = 0.75
+config = { url = "https://digital-strategy.ec.europa.eu/en/rss.xml" }
+
+# NIST publishes no AI-specific feed (only a general newsroom feed exists;
+# a ?topic=artificial-intelligence query param and several taxonomy-style
+# URLs were tried and all silently ignored, returning the same
+# unfiltered 40-item general feed -- verified live). Included anyway,
+# at reduced authority, because it is a real, working, primary federal
+# source and AI announcements do appear in it; the noise (facilities
+# notices, unrelated program news) is the tradeoff, made explicit here
+# rather than hidden. Stanford HAI (hai.stanford.edu, five URL variants
+# tried) and every guessed whitehouse.gov / ai.gov / federalregister.gov
+# feed (federalregister.gov additionally returned a bot-block page, not a
+# 404) were NOT added -- no working feed found. See phaseC-report.md.
+[[source]]
+id = "nist"
+plugin = "rss"
+territory = "policy"
+cadence_minutes = 240
+authority = 0.5
+config = { url = "https://www.nist.gov/news-events/news/rss.xml" }
+
+# =============================================================================
+# Infrastructure
+# =============================================================================
+
+[[source]]
+id = "nvidia_newsroom"
+plugin = "rss"
+territory = "infrastructure"
+cadence_minutes = 180
+authority = 0.75
+config = { url = "https://nvidianews.nvidia.com/releases.xml" }
+
+[[source]]
+id = "nvidia_devblog"
+plugin = "rss"
+territory = "infrastructure"
+cadence_minutes = 180
+authority = 0.7
+config = { url = "https://developer.nvidia.com/blog/feed" }
+
+[[source]]
+id = "amd"
+plugin = "rss"
+territory = "infrastructure"
+cadence_minutes = 240
+authority = 0.65
+config = { url = "https://ir.amd.com/rss/news-releases.xml" }
+
+[[source]]
+id = "datacenterdynamics"
+plugin = "rss"
+territory = "infrastructure"
+cadence_minutes = 120
+authority = 0.6
+config = { url = "https://www.datacenterdynamics.com/en/rss/" }
+
+[[source]]
+id = "trendforce"
+plugin = "rss"
+territory = "infrastructure"
+cadence_minutes = 180
+authority = 0.6
+config = { url = "https://www.trendforce.com/news/feed" }
+
+# SemiAnalysis (semianalysis.com/feed): every request returned HTTP 429
+# (rate-limited / bot-blocked), never a 404 -- genuinely different failure
+# mode from "doesn't exist". Not added; worth retrying by hand later with
+# a browser session rather than curl. Groq and Cerebras: no working feed
+# found at any guessed URL (groq.com and cerebras.ai both 404 on every
+# /rss.xml, /feed, /blog/rss.xml, /news/rss.xml variant tried). See
+# phaseC-report.md.

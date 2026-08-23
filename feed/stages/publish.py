@@ -117,7 +117,14 @@ def _dominant_embedding_model_id(session: Session, story_ids: list[int]) -> str 
 
 def _sources_report_dict(session: Session, *, now: datetime) -> dict:
     sources = []
-    for src in session.scalars(select(Source).order_by(Source.id)):
+    # Only enabled sources are published: a source `feed sources sync`
+    # disabled (removed from sources.catalogue.toml, e.g. a dead RSS feed)
+    # is no longer part of this pipeline's active coverage and must not
+    # keep showing up as permanently FAILING on the health page -- see
+    # feed.stages.sync's docstring.
+    for src in session.scalars(
+        select(Source).where(Source.enabled.is_(True)).order_by(Source.id)
+    ):
         error = src.last_error
         if error and len(error) > 300:
             error = error[:300] + "..."
@@ -130,6 +137,7 @@ def _sources_report_dict(session: Session, *, now: datetime) -> dict:
             "consecutive_failures": src.consecutive_failures,
             "last_error": error,
             "coverage_warning": src.coverage_warning,
+            "territory": src.territory,
         })
     return {"generated_at": _iso(now), "sources": sources}
 

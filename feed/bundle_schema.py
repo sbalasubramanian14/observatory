@@ -104,6 +104,10 @@ class SourceHealth(_Strict):
     # backfill cap narrowing the fetch window) -- None means the last run
     # collected everything since the previous one, per source.
     coverage_warning: str | None = None
+    # Spec 2's four coverage territories (research | industry | policy |
+    # infrastructure), from sources.catalogue.toml via `feed sources sync`.
+    # None for a source never synced from the catalogue.
+    territory: str | None = None
 
 
 class SourcesReport(_Strict):

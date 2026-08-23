@@ -93,6 +93,14 @@ class Source(Base):
     # older items between runs). Published in sources.json (spec 4.2:
     # "silent coverage loss ... must be visible in the client").
     coverage_warning: Mapped[str | None] = mapped_column(Text)
+    # Spec 2's four coverage territories (research | industry | policy |
+    # infrastructure), populated from sources.catalogue.toml by `feed
+    # sources sync` (see feed.catalogue / feed.stages.sync). Nullable so a
+    # pre-existing row added by hand (e.g. `feed sources add`, or a row
+    # from before this column existed) does not fail to load -- it just
+    # shows as "no territory" in sources.json / the territory-mix report
+    # until the next sync assigns one.
+    territory: Mapped[str | None] = mapped_column(String(32))
 
 class Item(Base):
     __tablename__ = "item"

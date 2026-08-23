@@ -1,3 +1,11 @@
+# sources.example.toml — superseded by sources.catalogue.toml (checked in,
+# real config, kept in sync with the DB via `feed sources sync`). This
+# file is unused by any code path and kept only as a historical example of
+# the old ad-hoc `feed sources add` workflow; note its "anthropic" line
+# below is now known-dead (verified 404, see phaseC-report.md) and its
+# "openai" URL is stale (openai.com/blog/rss.xml moved to
+# openai.com/news/rss.xml) -- sources.catalogue.toml has the current,
+# verified values for both.
 # sources.example.toml — feed the ids to `feed sources add`
 # arxiv:ai          plugin=arxiv            {"categories": ["cs.AI","cs.CL","cs.LG"]}
 # hn                plugin=hackernews       {"min_score": 150}

@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from sqlalchemy import func, select
 import feed.sources  # noqa: F401  (registers plugins)
+from feed.catalogue import DEFAULT_CATALOGUE_PATH, load_catalogue
 from feed.clustering.adjudicate import NullAdjudicator, ThresholdAdjudicator
 from feed.config import BulkProviderConfig, Config, load_config
 from feed.db import create_all, make_engine, make_session_factory
@@ -29,6 +30,7 @@ from feed.stages.enrich import enrich
 from feed.stages.normalize import normalize
 from feed.stages.publish import publish
 from feed.stages.score import score_stories
+from feed.stages.sync import sync_sources
 
 log = logging.getLogger(__name__)
 
@@ -136,10 +138,41 @@ def cmd_sources_list(args, cfg: Config) -> int:
     _, factory = _session(cfg)
     with factory() as s:
         for src in s.scalars(select(Source).order_by(Source.id)):
-            state = "ok" if src.consecutive_failures == 0 else f"FAILING x{src.consecutive_failures}"
+            if not src.enabled:
+                state = "disabled"
+            elif src.consecutive_failures == 0:
+                state = "ok"
+            else:
+                state = f"FAILING x{src.consecutive_failures}"
             if src.coverage_warning:
                 state += "  COVERAGE-WARN"
-            print(f"{src.id:<28} {src.plugin:<18} every {src.cadence_minutes:>4}m  {state}")
+            territory = src.territory or "-"
+            print(f"{src.id:<28} {src.plugin:<18} {territory:<15} "
+                 f"every {src.cadence_minutes:>4}m  {state}")
+    return 0
+
+
+def cmd_sources_sync(args, cfg: Config) -> int:
+    """Reconciles the `source` table against sources.catalogue.toml (spec:
+    "adding a source is editing a list", replacing ad-hoc `feed sources
+    add` calls). See feed.stages.sync.sync_sources for the reconciliation
+    rules (add / update / leave unchanged / disable / delete).
+    """
+    try:
+        entries = load_catalogue(args.catalogue)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"sources sync failed: {exc}", file=sys.stderr)
+        return 2
+    _, factory = _session(cfg)
+    with factory() as s:
+        res = sync_sources(s, entries)
+    print(f"sources sync: added={len(res.added)} updated={len(res.updated)} "
+          f"unchanged={len(res.unchanged)} disabled={len(res.disabled)} "
+          f"deleted={len(res.deleted)}")
+    for label, ids in (("added", res.added), ("updated", res.updated),
+                      ("disabled", res.disabled), ("deleted", res.deleted)):
+        if ids:
+            print(f"  {label:<10}{', '.join(ids)}")
     return 0
 
 
@@ -345,6 +378,10 @@ def build_parser() -> argparse.ArgumentParser:
                           "(default: use the global value)")
     add.set_defaults(func=cmd_sources_add)
     srcs.add_parser("list").set_defaults(func=cmd_sources_list)
+    sync = srcs.add_parser("sync")
+    sync.add_argument("--catalogue", type=Path, default=DEFAULT_CATALOGUE_PATH,
+                      help="path to the source catalogue TOML (default: sources.catalogue.toml)")
+    sync.set_defaults(func=cmd_sources_sync)
     return p
 
 

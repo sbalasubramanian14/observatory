@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head><title>Sample feedless news page</title></head>
+<body>
+  <div class="news-list">
+    <article class="card">
+      <a class="card-link" href="/posts/first-post">Read more</a>
+      <h3 class="card-title">First post title</h3>
+      <time class="card-date">August 20, 2026</time>
+      <p class="card-summary">Summary of the first post.</p>
+    </article>
+    <article class="card">
+      <a class="card-link" href="https://other-host.example.com/posts/second-post">Read more</a>
+      <h3 class="card-title">Second post title, absolute link on another host</h3>
+      <time class="card-date">2026-08-19</time>
+      <p class="card-summary">Summary of the second post.</p>
+    </article>
+    <article class="card">
+      <a class="card-link" href="/posts/undated-post">Read more</a>
+      <h3 class="card-title">Undated post title</h3>
+      <p class="card-summary">This post has no date element at all.</p>
+    </article>
+    <article class="card">
+      <a class="card-link" href="/posts/unparseable-date-post">Read more</a>
+      <h3 class="card-title">Post with an unparseable date string</h3>
+      <time class="card-date">not-a-real-date-xyz-123</time>
+      <p class="card-summary">The date text cannot be parsed.</p>
+    </article>
+    <article class="card">
+      <h3 class="card-title">Linkless card, must be skipped</h3>
+      <time class="card-date">2026-08-18</time>
+      <p class="card-summary">No link element at all in this card.</p>
+    </article>
+  </div>
+</body>
+</html>

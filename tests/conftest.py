@@ -121,6 +121,25 @@ def _block_real_arxiv_network(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _block_real_scraper_network(monkeypatch):
+    """Same guard, for feed.sources.scraper.ScraperSource. fetch() (and the
+    robots.txt check it makes first) calls the module-level _get_text() seam
+    rather than httpx directly so this can be monkeypatched cleanly. A
+    slow-marked test that genuinely wants the live site should monkeypatch
+    this back to a real implementation itself, not rely on this guard being
+    absent.
+    """
+    def _boom(*args, **kwargs):
+        raise AssertionError(
+            "real network call (feed.sources.scraper._get_text) attempted "
+            "during a test; monkeypatch feed.sources.scraper._get_text or "
+            "use path= instead"
+        )
+
+    monkeypatch.setattr("feed.sources.scraper._get_text", _boom)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_retry_sleep(monkeypatch):
     """feed.providers._retry.call_with_retry() backs off with a real
     time.sleep() between attempts in production. Left un-mocked, a test

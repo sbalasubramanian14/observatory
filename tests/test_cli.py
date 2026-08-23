@@ -35,6 +35,57 @@ def test_sources_add_then_list(tmp_path, capsys):
     assert "rss:example" in capsys.readouterr().out
 
 
+def test_sources_sync_adds_from_catalogue(tmp_path, capsys):
+    cfg = _cfg(tmp_path)
+    main(["--config", str(cfg), "init"])
+    catalogue = tmp_path / "cat.toml"
+    catalogue.write_text(f"""
+[[source]]
+id = "rss:example"
+plugin = "rss"
+territory = "research"
+cadence_minutes = 60
+authority = 0.7
+config = {{ path = "{FIX.as_posix()}" }}
+""", encoding="utf-8")
+
+    rc = main(["--config", str(cfg), "sources", "sync", "--catalogue", str(catalogue)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "added=1" in out
+    assert "rss:example" in out
+
+    main(["--config", str(cfg), "sources", "list"])
+    listing = capsys.readouterr().out
+    assert "research" in listing
+    assert "rss:example" in listing
+
+
+def test_sources_sync_missing_catalogue_file_reports_error(tmp_path, capsys):
+    cfg = _cfg(tmp_path)
+    main(["--config", str(cfg), "init"])
+    rc = main(["--config", str(cfg), "sources", "sync",
+              "--catalogue", str(tmp_path / "does-not-exist.toml")])
+    assert rc == 2
+    assert "sources sync failed" in capsys.readouterr().err
+
+
+def test_sources_sync_removes_a_source_absent_from_the_catalogue(tmp_path, capsys):
+    cfg = _cfg(tmp_path)
+    main(["--config", str(cfg), "init"])
+    main(["--config", str(cfg), "sources", "add", "--id", "old-src",
+         "--plugin", "rss", "--config-json", f'{{"path": "{FIX.as_posix()}"}}'])
+
+    empty_catalogue = tmp_path / "empty.toml"
+    empty_catalogue.write_text("", encoding="utf-8")
+    rc = main(["--config", str(cfg), "sources", "sync", "--catalogue", str(empty_catalogue)])
+    assert rc == 0
+    assert "deleted=1" in capsys.readouterr().out
+
+    main(["--config", str(cfg), "sources", "list"])
+    assert "old-src" not in capsys.readouterr().out
+
+
 def test_unknown_plugin_is_rejected_at_add_time(tmp_path):
     cfg = _cfg(tmp_path)
     main(["--config", str(cfg), "init"])

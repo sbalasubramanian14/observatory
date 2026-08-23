@@ -48,6 +48,9 @@ _STORY_NEW_COLUMNS: dict[str, str] = {
 _SOURCE_NEW_COLUMNS: dict[str, str] = {
     "max_backfill_days": "INTEGER",
     "coverage_warning": "TEXT",
+    # Added for the source catalogue / `feed sources sync` (spec 2's four
+    # coverage territories). Same additive-migration reasoning as above.
+    "territory": "VARCHAR(32)",
 }
 
 
