@@ -39,6 +39,30 @@ merge_threshold = 0.50
 [clustering.merge_thresholds]
 "sentence-transformers/all-MiniLM-L6-v2" = 0.35
 
+# Issue 3: the off-topic relevance gate (feed/stages/relevance.py). Runs
+# right after Tier 0 embedding, before clustering -- see RelevanceConfig's
+# docstring in feed/config.py for the full design rationale (two cheap
+# signals, bias toward keeping, rejections are visible via
+# Item.reject_reason and `feed stats`, never silently discarded).
+[relevance]
+enabled = true
+# Tuned against the shipped CPU default (MiniLM) using the actual Verge
+# film review that prompted this fix (measured cosine 0.089 against the
+# AI-topic reference centroid) and real AI/AI-adjacent stories from the
+# same source class (measured 0.166-0.65) -- see
+# tests/test_relevance_stage.py::test_rejects_the_verge_film_review and
+# its sibling live test. 0.12 sits closer to the reject side of that gap
+# than the midpoint would, so anything even loosely AI-adjacent clears it;
+# per-model overrides go in [relevance.cosine_thresholds] below, mirroring
+# [clustering.merge_thresholds].
+cosine_threshold = 0.12
+# One AI-vocabulary keyword hit is enough to call an item on-topic
+# regardless of its embedding similarity (the "OR on keep" half of the
+# bias-to-keep design).
+min_keyword_hits = 1
+
+[relevance.cosine_thresholds]
+
 # Spec 3.5 LLM tiering. No secrets here -- every provider's key comes from
 # the environment / gitignored .env via its own env_var below, never from
 # this file.

@@ -30,6 +30,7 @@ from feed.stages.embed import embed
 from feed.stages.enrich import enrich
 from feed.stages.normalize import normalize
 from feed.stages.publish import publish
+from feed.stages.relevance import gate_relevance, sweep_existing_corpus
 from feed.stages.score import score_stories
 from feed.stages.sync import sync_sources
 from feed.doctor import run_doctor
@@ -206,6 +207,29 @@ def cmd_run(args, cfg: Config) -> int:
         for name, stage_fn in [
             ("normalize", lambda: normalize(s)),
             ("embed", lambda: embed(s, embedder, limit=cfg.embedding.batch_size)),
+        ]:
+            res = drain(stage_fn)
+            print(f"{name+':':<11}ok={res.processed} failed={res.failed} "
+                  f"rounds={res.rounds}")
+            if res.rounds >= DEFAULT_MAX_ROUNDS:
+                log.warning(
+                    "%s: hit the %d-round drain safety cap; the queue may "
+                    "not be fully drained -- check for a stuck row",
+                    name, DEFAULT_MAX_ROUNDS,
+                )
+
+        # Issue 3: the off-topic gate. Runs after embed (reuses the
+        # embedding Tier 0 just computed -- no extra encode call) and
+        # before cluster (so a rejected item never joins a story in the
+        # first place). NOT drain()'d -- see gate_relevance's own
+        # docstring for why a single pass over every currently-EMBEDDED
+        # item is the right amount of work, unlike the batched stages
+        # above.
+        rel_res = gate_relevance(s, cfg.relevance, embedder)
+        print(f"relevance: ok={rel_res.processed} failed={rel_res.failed} "
+              f"rejected={rel_res.rejected}")
+
+        for name, stage_fn in [
             ("cluster", lambda: cluster(s, cfg.clustering, adjudicator)),
             ("score", lambda: score_stories(s, cfg.scoring)),
         ]:
@@ -344,6 +368,32 @@ def cmd_pipeline(args, cfg: Config) -> int:
     return result.exit_code
 
 
+def cmd_relevance_sweep(args, cfg: Config) -> int:
+    """Issue 3's corpus cleanup: retroactively apply the off-topic gate to
+    stories already ingested before it existed (e.g. the Verge film
+    review that reached publish off the old whole-site feed). Dry-run by
+    default -- prints every offending item and how many there are WITHOUT
+    touching the database; pass --apply to actually detach/reject them.
+    `feed publish` (and the one-click pipeline) must be re-run afterward
+    for the live site to reflect the cleanup -- this command only touches
+    feed.db.
+    """
+    _, factory = _session(cfg)
+    embedder = build_embedder(cfg.embedding)
+    with factory() as s:
+        res = sweep_existing_corpus(s, cfg.relevance, embedder, apply=args.apply,
+                                    source_ids=args.source or None)
+    mode = "APPLIED" if args.apply else "dry-run (pass --apply to make this permanent)"
+    print(f"relevance sweep [{mode}]: scanned={res.scanned} "
+          f"off_topic={len(res.findings)} stories_deleted={res.stories_deleted}")
+    for f in res.findings:
+        print(f"  item={f.item_id:<7} story={f.story_id!s:<7} "
+             f"[{f.story_category or '-'} {f.story_score if f.story_score is not None else '-'}]  "
+             f"{f.title[:70]!r}  source={f.source_id}")
+        print(f"      {f.reason}")
+    return 0
+
+
 def cmd_doctor(args, cfg: Config) -> int:
     """Preflight diagnosis (spec Phase F): what turns "it didn't work" into
     a diagnosis. See feed.doctor.run_doctor for the individual checks.
@@ -418,6 +468,25 @@ def cmd_stats(args, cfg: Config) -> int:
             select(Item.stage, func.count()).group_by(Item.stage)
         ):
             print(f"  {stage.value:<12}{n}")
+        # Issue 3: rejections must be visible, never a silent drop -- see
+        # feed.stages.relevance. The stage-breakdown loop above already
+        # shows "rejected  N" (Item.stage is Stage.REJECTED is just
+        # another stage value), but a dedicated line plus a by-source
+        # breakdown is what actually answers "which source is drifting
+        # off-topic" at a glance, without grepping the db by hand.
+        rejected_total = s.scalar(
+            select(func.count()).where(Item.stage == Stage.REJECTED)
+        ) or 0
+        print(f"rejected as off-topic: {rejected_total}")
+        if rejected_total:
+            for source_id, n in s.execute(
+                select(Item.source_id, func.count())
+                .where(Item.stage == Stage.REJECTED)
+                .group_by(Item.source_id)
+                .order_by(func.count().desc())
+            ):
+                print(f"    {source_id:<28}{n}")
+
         total = s.scalar(select(func.count()).select_from(Story)) or 0
         print(f"stories: {total}")
         print("top stories by importance:")
@@ -517,6 +586,15 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--catalogue", type=Path, default=DEFAULT_CATALOGUE_PATH,
                       help="path to the source catalogue TOML (default: sources.catalogue.toml)")
     sync.set_defaults(func=cmd_sources_sync)
+
+    rel = sub.add_parser("relevance").add_subparsers(dest="sub", required=True)
+    sweep = rel.add_parser("sweep")
+    sweep.add_argument("--apply", action="store_true",
+                       help="actually detach/reject off-topic items (default: dry-run, report only)")
+    sweep.add_argument("--source", action="append", default=[],
+                       help="scope the sweep to this source id (repeatable); "
+                            "default: every source")
+    sweep.set_defaults(func=cmd_relevance_sweep)
     return p
 
 

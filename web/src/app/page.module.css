@@ -26,6 +26,17 @@
   font-size: var(--text-xl);
 }
 
+/* Issue 2 (mobile deck density): the card deck's whole point is a
+ * genuinely full-viewport read. The "The Feed" heading ate ~40px of that
+ * for a label the deck itself doesn't need (the controls row next to it
+ * already orients the reader) -- hidden here, on mobile only, so desktop
+ * cards mode (if ever reached at a wide viewport) keeps its heading. */
+@media (max-width: 767px) {
+  .titleCards {
+    display: none;
+  }
+}
+
 .heroTop {
   display: flex;
   align-items: center;

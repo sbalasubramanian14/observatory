@@ -136,7 +136,7 @@ export default function FeedPage() {
     <div className={`${styles.container} ${isCards ? styles.containerCards : ""}`}>
       <div className={`${styles.hero} ${isCards ? styles.heroCompact : ""}`}>
         <div className={styles.heroTop}>
-          <h1 className={styles.title}>The Feed</h1>
+          <h1 className={`${styles.title} ${isCards ? styles.titleCards : ""}`}>The Feed</h1>
           <div className={styles.heroControls}>
             <SourceFilter sources={sources?.sources ?? []} stories={stories ?? []} />
             <SortControl />

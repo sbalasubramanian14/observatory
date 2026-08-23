@@ -34,6 +34,15 @@ export function StoryCard({
   const [detail, setDetail] = useState<StoryDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(() => getSavedIds().has(story.id));
+  // Issue 1: the summary is clamped to 3 lines below (styles.summary) with
+  // no way to read the rest — expand-in-place, not a navigation, so the
+  // reader doesn't lose their place in the feed. A plain <button> (not a
+  // clickable <p>/div with a synthetic role) so Tab/Enter/Space and touch
+  // all work for free via native button semantics, and it lives entirely
+  // inside StoryCard — the mobile card deck (StoryDeckCard) already shows
+  // the full summary with its own internal scroll, so there's no swipe-
+  // gesture surface to fight here.
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
 
   async function toggleExpand() {
     const next = !expanded;
@@ -119,9 +128,23 @@ export function StoryCard({
           {story.title}
         </Link>
         <LeadImage src={story.lead_image_url} alt="" variant="card" priority={priority} />
-        <p className={`${styles.summary} ${!story.summary ? styles.summaryEmpty : ""}`}>
+        <p
+          className={`${styles.summary} ${!story.summary ? styles.summaryEmpty : ""} ${
+            summaryExpanded ? styles.summaryExpanded : ""
+          }`}
+        >
           {story.summary ?? "No summary yet — this story hasn't been through Tier 1 processing."}
         </p>
+        {story.summary && (
+          <button
+            type="button"
+            className={styles.summaryToggle}
+            onClick={() => setSummaryExpanded((v) => !v)}
+            aria-expanded={summaryExpanded}
+          >
+            {summaryExpanded ? "Show less" : "Read more"}
+          </button>
+        )}
         <div className={styles.metaBottom}>
           <span className={styles.metaItem}>
             <svg className={styles.icon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

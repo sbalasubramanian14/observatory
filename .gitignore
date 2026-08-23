@@ -41,3 +41,4 @@ WhatsApp*
 # pushes the bundle to (feed/pipeline.py DEFAULT_ALMANAC_DIR) -- a git
 # checkout nested inside this repo, never itself committed here.
 /.cache/
+debug/

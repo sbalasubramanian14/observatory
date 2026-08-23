@@ -48,6 +48,17 @@ class Stage(enum.Enum):
     CLUSTERED = "clustered"
     SCORED = "scored"
     FAILED = "failed"
+    # Relevance gate (feed/stages/relevance.py): a terminal stage, like
+    # FAILED, but for a *content* decision rather than a pipeline error --
+    # the item is well-formed and processed fine, the gate just judged it
+    # off-topic for an AI news feed (e.g. a Verge film review that came in
+    # off a general site-wide feed). Kept distinct from FAILED so `feed
+    # stats` and the corpus-audit tooling can report "N rejected as
+    # off-topic" without conflating it with "N items errored" -- the two
+    # numbers mean very different things to the owner. Item.reject_reason
+    # carries the auditable "why" (spec: rejections must be visible, never
+    # silently discarded).
+    REJECTED = "rejected"
 
 
 class StoryStatus(enum.Enum):
@@ -150,6 +161,13 @@ class Item(Base):
     # stage's post-step and `feed backfill-images` resumable and idempotent:
     # neither re-fetches a page for an item this column already covers.
     image_checked_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+    # Set only when stage == Stage.REJECTED (the relevance gate, or the
+    # one-off corpus sweep that applies the same signal retroactively --
+    # see feed.stages.relevance). Human-readable, e.g. "off-topic:
+    # cosine=0.089 (threshold 0.120), keyword_hits=0" -- the whole point
+    # is that a rejection is auditable, not a silent drop. NULL for every
+    # item that was never rejected (the overwhelming majority).
+    reject_reason: Mapped[str | None] = mapped_column(Text)
     published_at: Mapped[datetime | None] = mapped_column(UtcDateTime, index=True)
     fetched_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary)

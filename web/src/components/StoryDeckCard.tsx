@@ -154,10 +154,15 @@ export function StoryDeckCard({
           <Link href={`/story/?id=${story.id}`} className={styles.headline}>
             {story.title}
           </Link>
-          <p className={`${styles.summary} ${!story.summary ? styles.summaryEmpty : ""}`}>
-            {story.summary ?? "No summary yet — this story hasn't been through Tier 1 processing."}
-          </p>
-          {!story.lead_image_url && <div className={styles.textOnlyPad} aria-hidden="true" />}
+          {/* Issue 2: this is the region that scrolls internally when a
+              summary is long, instead of the whole card (which would push
+              the headline/meta above off-screen) or the card itself
+              growing past the viewport. */}
+          <div className={styles.summaryScroll}>
+            <p className={`${styles.summary} ${!story.summary ? styles.summaryEmpty : ""}`}>
+              {story.summary ?? "No summary yet — this story hasn't been through Tier 1 processing."}
+            </p>
+          </div>
         </div>
 
         <div className={styles.footer}>

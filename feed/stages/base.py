@@ -15,6 +15,14 @@ class StageResult:
     name: str
     processed: int = 0
     failed: int = 0
+    # Only meaningful for feed.stages.relevance.gate_relevance: how many of
+    # `processed` were judged off-topic and routed to Stage.REJECTED
+    # rather than left to continue to clustering. A subset of `processed`,
+    # not additional to it -- see that stage's docstring for why an item
+    # counts as "processed" either way (drain()'s termination check relies
+    # on processed+failed shrinking the backlog every round). Left at the
+    # dataclass default 0 for every other stage.
+    rejected: int = 0
     errors: list[tuple[int, str]] = field(default_factory=list)
     # Number of drain() rounds folded into this result. A stage called
     # directly (not through drain()) is one round by definition.
@@ -104,6 +112,7 @@ def drain(stage_fn: StageCall, *, max_rounds: int = DEFAULT_MAX_ROUNDS) -> Stage
         else:
             total.processed += res.processed
             total.failed += res.failed
+            total.rejected += res.rejected
             total.errors.extend(res.errors)
         if res.processed == 0 and res.failed == 0:
             break

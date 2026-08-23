@@ -91,7 +91,15 @@ plugin = "rss"
 territory = "industry"
 cadence_minutes = 60
 authority = 0.6
-config = { url = "https://www.theverge.com/rss/index.xml" }
+# Was the whole-site feed (rss/index.xml), which carries every Verge
+# vertical -- film reviews, gadgets, culture -- not just AI. That let a
+# horror-film review ("'We're All Going to the World's Fair' Debuts as
+# Intimate Coming-of-Age Horror Film") into the AI feed, categorised
+# OTHER, score 48. Swapped for the AI-specific feed (verified live
+# 2026-08-23: 200 OK, 10 entries, all AI-topic). The relevance gate
+# (feed/stages/relevance.py) is the second line of defense for whatever
+# still slips through an AI-labelled feed.
+config = { url = "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml" }
 
 [[source]]
 id = "venturebeat"
@@ -107,7 +115,10 @@ plugin = "rss"
 territory = "industry"
 cadence_minutes = 60
 authority = 0.7
-config = { url = "https://feeds.arstechnica.com/arstechnica/technology-lab" }
+# Was "technology-lab", a general tech feed (not AI-specific). Swapped
+# for the dedicated AI feed (verified live 2026-08-23: 200 OK, 20
+# entries). See theverge's entry above for the same fix and rationale.
+config = { url = "https://arstechnica.com/ai/feed/" }
 
 [[source]]
 id = "marktechpost"

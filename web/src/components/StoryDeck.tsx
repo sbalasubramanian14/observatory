@@ -69,7 +69,15 @@ export function StoryDeck({
     <div
       ref={deckRef}
       className={styles.deck}
-      style={{ height: height ? `${height}px` : "80vh" }}
+      // Issue 2: `height` is the real, JS-measured value (window.innerHeight
+      // minus this element's own top, re-measured on resize/orientation
+      // change — see the effect above), which already tracks the mobile
+      // browser chrome correctly. "80dvh" is only a pre-hydration/SSR
+      // fallback for the one frame before that measurement runs; dvh
+      // (dynamic viewport height) is used instead of vh there too so that
+      // very first paint isn't sized against the address-bar-expanded
+      // viewport on browsers that support it.
+      style={{ height: height ? `${height}px` : "80dvh" }}
     >
       {stories.map((r, i) => (
         <section key={r.story.id} className={styles.slide} aria-label={`Story ${i + 1} of ${stories.length}`}>

@@ -72,6 +72,63 @@ class ClusteringConfig(BaseModel):
         return self.merge_threshold
 
 
+class RelevanceConfig(BaseModel):
+    """The off-topic gate (Issue 3): a cheap, pre-LLM filter that runs once
+    per item, right after Tier 0 embedding and before clustering, so a
+    general-purpose feed accidentally added to the catalogue (or a niche
+    off-topic item slipping through an otherwise AI-labelled feed) doesn't
+    silently pollute the AI news feed -- e.g. a Verge film review that
+    reached publish as an OTHER-category story, score 48.
+
+    Design (see feed/stages/relevance.py for the implementation):
+    combines two independent, cheap signals rather than one:
+
+    1. Embedding cosine similarity to a small, fixed "AI topic" reference
+       centroid -- reuses the embedding Tier 0 already computed (spec: "no
+       per-item LLM call is acceptable" at ~1,700 items/day). Catches
+       topical drift a keyword list can't ("a piece about a surveillance
+       camera startup's AI-driven monitoring" has no exact keyword hit but
+       sits close to the AI centroid).
+    2. A curated keyword/entity match against the item's own text --
+       cheap, deterministic, and immune to embedding-model drift or a
+       reference centroid that ages poorly. Catches the inverse case: a
+       short, generic-sounding item that happens to be squarely about AI
+       (mentions "GPT" or "Anthropic" by name) but whose embedding sits in
+       an ambiguous region of the space.
+
+    An item is rejected ONLY if BOTH signals say off-topic (cosine below
+    threshold AND zero keyword hits) -- deliberately an AND on the reject
+    condition (an OR on the "keep" condition), per the owner's explicit
+    instruction to bias toward keeping: wrongly dropping a real AI story
+    is invisible and unrecoverable (a reader never sees what they never
+    got), wrongly keeping an off-topic one is merely annoying and visible
+    on the page. cosine_threshold defaults low (0.12) for the same reason
+    -- tuned against real examples (see tests/test_relevance_stage.py and
+    the live sweep in the Issue 3 report): the offending Verge film review
+    measured 0.089 against the shipped MiniLM reference centroid, while a
+    borderline-but-genuine AI/surveillance story measured 0.166 and every
+    clearly-AI story measured 0.27-0.65. 0.12 sits in the gap, closer to
+    the reject side than a naive midpoint would, so a story that's even
+    loosely AI-adjacent clears it.
+    """
+    enabled: bool = True
+    cosine_threshold: float = Field(default=0.12, ge=-1.0, le=1.0)
+    # Keyed by embedding model id, mirroring ClusteringConfig.merge_thresholds
+    # -- different embedding models produce different similarity scales, so
+    # one global cosine_threshold cannot be assumed to serve every model.
+    # Falls back to cosine_threshold when the active model id is absent.
+    cosine_thresholds: dict[str, float] = Field(default_factory=dict)
+    # A single hit on the curated AI-vocabulary list is enough to call an
+    # item on-topic regardless of its embedding similarity -- see the
+    # class docstring's "OR on keep" rationale.
+    min_keyword_hits: int = Field(default=1, ge=1)
+
+    def threshold_for(self, model_id: str | None) -> float:
+        if model_id is not None and model_id in self.cosine_thresholds:
+            return self.cosine_thresholds[model_id]
+        return self.cosine_threshold
+
+
 class ScoringConfig(BaseModel):
     # entity is pinned to 0.0, not 0.15, DELIBERATELY: nothing in Phase 1
     # populates the Entity/StoryEntity tables (feed.scoring.signals.
@@ -179,6 +236,7 @@ class Config(BaseModel):
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     collect: CollectConfig = Field(default_factory=CollectConfig)
     clustering: ClusteringConfig = Field(default_factory=ClusteringConfig)
+    relevance: RelevanceConfig = Field(default_factory=RelevanceConfig)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)

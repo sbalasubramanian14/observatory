@@ -173,8 +173,13 @@ def test_run_drains_more_than_one_batch_per_stage(tmp_path, monkeypatch, capsys)
     finding's own numbers -- 250 collected items, more than both of those
     batch sizes -- with the embedder stubbed out (no model download, so
     this stays fast) to isolate the drain behaviour itself. A single `feed
-    run` call must still carry every item all the way to Stage.SCORED, not
-    leave any of them stuck at collected/normalized/embedded/clustered.
+    run` call must still carry every item all the way to a terminal stage
+    (Stage.SCORED, or Stage.REJECTED via the Issue 3 relevance gate -- the
+    stub embedder's 8-way hash-bucket vectors are semantically meaningless,
+    so some items land outside the gate's reference centroid purely by
+    hash luck; that's fine, this test cares about drain mechanics, not
+    relevance judgement), not leave any of them stuck at
+    collected/normalized/embedded/clustered/failed.
     """
     import numpy as np
     import feed.cli as cli_module
@@ -260,10 +265,11 @@ def test_run_drains_more_than_one_batch_per_stage(tmp_path, monkeypatch, capsys)
         items = s.query(Item).all()
         assert len(items) == n
         stages = {i.stage for i in items}
-        assert stages == {Stage.SCORED}, (
-            f"expected all {n} items to reach SCORED in a single `feed run`, "
-            f"got stages present: {stages}"
+        assert stages <= {Stage.SCORED, Stage.REJECTED}, (
+            f"expected all {n} items to reach a terminal stage (SCORED or "
+            f"REJECTED) in a single `feed run`, got stages present: {stages}"
         )
+        assert Stage.SCORED in stages  # not every item was rejected
 
 
 def _seed_scored_story(cfg_path, *, score=0.9):

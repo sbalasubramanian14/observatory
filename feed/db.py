@@ -77,6 +77,11 @@ _ITEM_NEW_COLUMNS: dict[str, str] = {
     # existing rows read back NULL, which is exactly "never attempted" --
     # the correct value, not a wrong default needing a backfill UPDATE.
     "image_checked_at": "DATETIME",
+    # Relevance gate (see feed.models.Item.reject_reason's docstring).
+    # Same additive-migration reasoning: NULL is exactly the correct value
+    # for every pre-existing row ("never rejected"), not a placeholder
+    # needing a backfill UPDATE.
+    "reject_reason": "TEXT",
 }
 
 
