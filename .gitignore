@@ -28,3 +28,6 @@ public/
 LLM-PROVIDERS.md
 PIPELINE-CLI.md
 IMPLEMENTATION-TRACKER.md
+*.jpeg
+*.jpg
+WhatsApp*
