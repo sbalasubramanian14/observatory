@@ -42,6 +42,11 @@ export interface FeedStoryRow {
   lead_image_url: string | null;
   outlet_count: number;
   score: number;
+  /** Distinct, sorted source ids across this story's contributing items
+   * (feed.stages.publish._feed_page_story_dict). Drives the source/
+   * territory filter — see lib/sourceFilter.ts. A story with items from
+   * more than one source matches the filter if ANY of them do. */
+  source_ids: string[];
   summary: string | null;
   title: string;
   updated_at: string;
@@ -94,6 +99,11 @@ export interface SourceHealth {
   last_error: string | null;
   last_run_at: string | null;
   plugin: string;
+  /** One of spec §2's four coverage territories (research | industry |
+   * policy | infrastructure), from sources.catalogue.toml. null for a
+   * source that predates the catalogue sync. Already published in
+   * sources.json — this type just hadn't caught up to that yet. */
+  territory: string | null;
 }
 
 export interface SourcesFile {

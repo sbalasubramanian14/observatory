@@ -11,9 +11,11 @@ import {
   type RankedStory,
 } from "@/lib/personalization";
 import { sortNonImportance, useSortMode } from "@/lib/sort";
+import { storyMatchesFilter, useSourceFilter } from "@/lib/sourceFilter";
 import type { FeedStoryRow, SourcesFile } from "@/lib/types";
 import { StoryCard } from "@/components/StoryCard";
 import { SortControl } from "@/components/SortControl";
+import { SourceFilter } from "@/components/SourceFilter";
 import styles from "./page.module.css";
 
 const PAGE_SIZE = 20;
@@ -21,6 +23,7 @@ const PAGE_SIZE = 20;
 export default function FeedPage() {
   const { enabled } = usePersonalization();
   const [sortMode] = useSortMode();
+  const [selectedSourceIds, setSelectedSourceIds] = useSourceFilter();
   const [stories, setStories] = useState<FeedStoryRow[] | null>(null);
   const [embeddings, setEmbeddings] = useState<Map<number, Float32Array>>(new Map());
   const [embeddingModelId, setEmbeddingModelId] = useState("");
@@ -56,27 +59,41 @@ export default function FeedPage() {
     };
   }, []);
 
+  // Source/territory filter is applied FIRST, before sort/personalization
+  // ever see the list — every other mode (recency, outlets, unread, and
+  // importance's fit-based re-rank + serendipity reservation) then
+  // operates on the already-narrowed set, so e.g. the 15% reserved-slot
+  // budget is 15% of the filtered feed, not the whole published one, and
+  // "Showing X of Y" below counts against the filtered total. Filtering
+  // after ranking instead would have let a filtered-out story still eat a
+  // reserved slot or a page-size budget for nothing.
+  const filteredStories = useMemo(
+    () => (stories ? stories.filter((s) => storyMatchesFilter(s, selectedSourceIds)) : null),
+    [stories, selectedSourceIds],
+  );
+
   const ranked: RankedStory[] = useMemo(() => {
-    if (!stories) return [];
+    if (!filteredStories) return [];
     // "Importance" is the only sort mode personalization's fit-based
     // re-rank and serendipity reservation apply to — see lib/sort.ts's
     // sortNonImportance docstring for why the other three modes render
     // literally instead.
     if (sortMode === "importance") {
       const centroids = getCentroids();
-      return rerankFeed(stories, embeddings, centroids, enabled);
+      return rerankFeed(filteredStories, embeddings, centroids, enabled);
     }
-    const ordered = sortNonImportance(stories, sortMode, getReadIds(), getDismissedIds());
+    const ordered = sortNonImportance(filteredStories, sortMode, getReadIds(), getDismissedIds());
     return ordered.map((story) => ({ story, fit: 0, combined: story.score, reserved: false }));
     // rankVersion forces a recompute after a save/dismiss signal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stories, embeddings, enabled, sortMode, rankVersion]);
+  }, [filteredStories, embeddings, enabled, sortMode, rankVersion]);
 
   const visible = ranked
     .filter((r) => !dismissedThisSession.has(r.story.id))
     .slice(0, visibleCount);
 
   const strugglingSources = sources?.sources.filter((s) => s.enabled && s.consecutive_failures > 0) ?? [];
+  const filterActive = selectedSourceIds.size > 0;
 
   function handleDismiss(id: number) {
     setDismissedThisSession((prev) => new Set(prev).add(id));
@@ -99,7 +116,10 @@ export default function FeedPage() {
       <div className={styles.hero}>
         <div className={styles.heroTop}>
           <h1 className={styles.title}>The Feed</h1>
-          <SortControl />
+          <div className={styles.heroControls}>
+            <SourceFilter sources={sources?.sources ?? []} stories={stories ?? []} />
+            <SortControl />
+          </div>
         </div>
         <p className={styles.subtitle}>{subtitle}</p>
       </div>
@@ -137,11 +157,24 @@ export default function FeedPage() {
           </div>
 
           {visible.length === 0 && (
-            <p className={styles.state}>
-              {sortMode === "unread"
-                ? "No stories in the current feed window."
-                : "Nothing left unread right now — check back later, or turn off personalization to see the full published feed."}
-            </p>
+            <div className={styles.state}>
+              <p>
+                {filterActive && ranked.length === 0
+                  ? "No stories match the selected sources or territories."
+                  : sortMode === "unread"
+                    ? "No stories in the current feed window."
+                    : "Nothing left unread right now — check back later, or turn off personalization to see the full published feed."}
+              </p>
+              {filterActive && ranked.length === 0 && (
+                <button
+                  type="button"
+                  className={styles.clearFilterLink}
+                  onClick={() => setSelectedSourceIds(new Set())}
+                >
+                  Clear source filter
+                </button>
+              )}
+            </div>
           )}
 
           <div className={styles.list}>
