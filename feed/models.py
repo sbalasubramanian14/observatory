@@ -93,6 +93,19 @@ class Source(Base):
     # older items between runs). Published in sources.json (spec 4.2:
     # "silent coverage loss ... must be visible in the client").
     coverage_warning: Mapped[str | None] = mapped_column(Text)
+    # A1-followup (arXiv 429 handling): wall-clock time of the most recent
+    # HTTP request a rate-limit-aware source plugin (currently only
+    # ArxivSource) actually made, persisted so the politeness delay works
+    # ACROSS process runs, not just between pages within one run -- an
+    # in-memory timestamp is invisible to the next `feed run` invocation,
+    # which is exactly what let a fresh run's opening request land with no
+    # delay right after a previous run's last page and trip a 429. Read
+    # into the plugin instance before fetch() (feed.stages.collect) and
+    # written back after, whether the fetch ultimately succeeded or failed
+    # (a request was still made either way). None for a plugin that never
+    # sets it (every other current source) or a source that has never made
+    # a live request yet.
+    last_request_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
     # Spec 2's four coverage territories (research | industry | policy |
     # infrastructure), populated from sources.catalogue.toml by `feed
     # sources sync` (see feed.catalogue / feed.stages.sync). Nullable so a

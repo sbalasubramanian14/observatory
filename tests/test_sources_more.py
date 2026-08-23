@@ -1,6 +1,7 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import httpx
 import pytest
 from feed.sources.registry import build_source
 
@@ -333,6 +334,172 @@ def test_arxiv_pagination_against_the_real_api(monkeypatch):
     })
     items = list(src.fetch(since=None))
     assert len(items) > 25  # proves pagination happened, not just one request
+
+
+# --- A1-followup: 429 retry-with-backoff + cross-run pacing ---------------
+#
+# arxiv:ai showed Degraded on the live sources page from a single 429 that
+# would have cleared on its own -- arXiv's own guidance is to back off and
+# retry, not treat a throttle as a broken connector. These tests exercise
+# feed.sources.arxiv.ArxivSource._live_get_page directly (via fetch()),
+# monkeypatching the _get seam to return a 429 HTTPStatusError on demand --
+# never the real network.
+
+def _http_429(retry_after: str | None = None) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "https://export.arxiv.org/api/query")
+    headers = {"Retry-After": retry_after} if retry_after else {}
+    response = httpx.Response(429, request=request, headers=headers)
+    return httpx.HTTPStatusError("429 rate limited", request=request, response=response)
+
+
+def test_arxiv_429_retries_with_exponential_backoff_then_succeeds(monkeypatch):
+    import feed.sources.arxiv as arxiv_module
+
+    calls = {"n": 0}
+    sleeps: list[float] = []
+    page = _arxiv_atom_page([("2608.00001", "2026-08-20T10:00:00Z", "Recovered paper")]).encode()
+
+    def flaky_get(url, *, timeout):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise _http_429()
+        return page
+
+    monkeypatch.setattr(arxiv_module, "_get", flaky_get)
+    monkeypatch.setattr(arxiv_module, "_sleep", lambda s: sleeps.append(s))
+
+    # rate_limit_seconds=0 isolates the assertion to backoff delays only --
+    # otherwise the (unrelated) pacing delay between attempts would also
+    # land in `sleeps` and make the exact-values assertion below flaky.
+    src = build_source("arxiv", "arxiv:cs.AI", {
+        "categories": ["cs.AI"], "rate_limit_seconds": 0, "retry_backoff_base": 2.0,
+        "max_retries": 4,
+    })
+    items = list(src.fetch(since=None))
+
+    assert [i.title for i in items] == ["Recovered paper"]
+    assert calls["n"] == 3  # 2 failures + 1 success -- proves it genuinely retried
+    assert sleeps == [2.0, 4.0]  # 2*2**0, 2*2**1 -- exponential backoff
+
+
+def test_arxiv_429_retry_honours_retry_after_header_over_backoff(monkeypatch):
+    import feed.sources.arxiv as arxiv_module
+
+    calls = {"n": 0}
+    sleeps: list[float] = []
+    page = _arxiv_atom_page([("2608.00002", "2026-08-20T10:00:00Z", "OK paper")]).encode()
+
+    def flaky_get(url, *, timeout):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _http_429(retry_after="7")
+        return page
+
+    monkeypatch.setattr(arxiv_module, "_get", flaky_get)
+    monkeypatch.setattr(arxiv_module, "_sleep", lambda s: sleeps.append(s))
+
+    src = build_source("arxiv", "arxiv:cs.AI", {
+        "categories": ["cs.AI"], "rate_limit_seconds": 0, "retry_backoff_base": 2.0,
+    })
+    items = list(src.fetch(since=None))
+
+    assert len(items) == 1
+    # Retry-After: 7 wins over the computed exponential backoff (2*2**0=2).
+    assert sleeps == [7.0]
+
+
+def test_arxiv_429_raises_after_retries_exhausted(monkeypatch):
+    import feed.sources.arxiv as arxiv_module
+
+    calls = {"n": 0}
+
+    def always_429(url, *, timeout):
+        calls["n"] += 1
+        raise _http_429()
+
+    monkeypatch.setattr(arxiv_module, "_get", always_429)
+    src = build_source("arxiv", "arxiv:cs.AI", {
+        "categories": ["cs.AI"], "rate_limit_seconds": 0, "max_retries": 2,
+        "retry_backoff_base": 0.01,
+    })
+
+    with pytest.raises(httpx.HTTPStatusError):
+        list(src.fetch(since=None))
+    assert calls["n"] == 3  # initial attempt + 2 retries, then give up
+
+
+def test_arxiv_pacing_delay_applied_before_first_request_when_last_request_recent(monkeypatch):
+    import feed.sources.arxiv as arxiv_module
+
+    fixed_now = datetime(2026, 8, 22, 12, 0, 5, tzinfo=timezone.utc)
+    sleeps: list[float] = []
+    page = _arxiv_atom_page([("2608.00003", "2026-08-20T10:00:00Z", "Paced paper")]).encode()
+
+    monkeypatch.setattr(arxiv_module, "_get", lambda url, *, timeout: page)
+    monkeypatch.setattr(arxiv_module, "_sleep", lambda s: sleeps.append(s))
+
+    src = build_source("arxiv", "arxiv:cs.AI", {
+        "categories": ["cs.AI"], "rate_limit_seconds": 3.0, "now": lambda: fixed_now,
+    })
+    # Simulates feed.stages.collect restoring last-run's persisted
+    # Source.last_request_at before calling fetch() -- the cross-run state
+    # the A1 bug never had.
+    src.last_request_at = fixed_now - timedelta(seconds=1)
+
+    items = list(src.fetch(since=None))
+    assert len(items) == 1
+    assert sleeps == [2.0]  # 3.0s owed - 1.0s already elapsed = 2.0s
+
+
+def test_arxiv_no_pacing_delay_when_last_request_is_old_enough(monkeypatch):
+    import feed.sources.arxiv as arxiv_module
+
+    fixed_now = datetime(2026, 8, 22, 12, 0, 5, tzinfo=timezone.utc)
+    sleeps: list[float] = []
+    page = _arxiv_atom_page([("2608.00004", "2026-08-20T10:00:00Z", "Unpaced paper")]).encode()
+
+    monkeypatch.setattr(arxiv_module, "_get", lambda url, *, timeout: page)
+    monkeypatch.setattr(arxiv_module, "_sleep", lambda s: sleeps.append(s))
+
+    src = build_source("arxiv", "arxiv:cs.AI", {
+        "categories": ["cs.AI"], "rate_limit_seconds": 3.0, "now": lambda: fixed_now,
+    })
+    src.last_request_at = fixed_now - timedelta(seconds=10)
+
+    list(src.fetch(since=None))
+    assert sleeps == []
+
+
+def test_arxiv_updates_last_request_at_after_a_successful_fetch(monkeypatch):
+    import feed.sources.arxiv as arxiv_module
+
+    fixed_now = datetime(2026, 8, 22, 12, 0, 0, tzinfo=timezone.utc)
+    page = _arxiv_atom_page([("2608.00005", "2026-08-20T10:00:00Z", "Stamped paper")]).encode()
+    monkeypatch.setattr(arxiv_module, "_get", lambda url, *, timeout: page)
+
+    src = build_source("arxiv", "arxiv:cs.AI", {
+        "categories": ["cs.AI"], "now": lambda: fixed_now,
+    })
+    assert src.last_request_at is None
+    list(src.fetch(since=None))
+    assert src.last_request_at == fixed_now
+
+
+def test_arxiv_updates_last_request_at_even_when_retries_are_exhausted(monkeypatch):
+    import feed.sources.arxiv as arxiv_module
+
+    fixed_now = datetime(2026, 8, 22, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(arxiv_module, "_get", lambda url, *, timeout: (_ for _ in ()).throw(_http_429()))
+
+    src = build_source("arxiv", "arxiv:cs.AI", {
+        "categories": ["cs.AI"], "rate_limit_seconds": 0, "max_retries": 1,
+        "retry_backoff_base": 0.01, "now": lambda: fixed_now,
+    })
+    with pytest.raises(httpx.HTTPStatusError):
+        list(src.fetch(since=None))
+    # A failed request is still a request -- the pacing clock must reflect
+    # it, or the next attempt/run would under-wait.
+    assert src.last_request_at == fixed_now
 
 
 # --- A2: Hacker News via the Algolia search_by_date API -------------------

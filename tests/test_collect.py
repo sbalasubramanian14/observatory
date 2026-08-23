@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import pytest
 from feed.config import CollectConfig
 from feed.models import Item, Source, Stage
 from feed.stages.collect import _effective_since, collect
@@ -293,3 +294,118 @@ def test_first_run_backfill_bound_is_logged_and_recorded(tmp_path, session, capl
     src = session.get(Source, "rss:first")
     assert src.coverage_warning is not None
     assert "first run" in src.coverage_warning
+
+
+# --- A1-followup: arXiv 429 handling at the collect() level ---------------
+#
+# The live sources page showed arxiv:ai Degraded from a single transient
+# 429 -- these prove collect() itself now distinguishes "rate-limited, will
+# retry" (never touches consecutive_failures) from "genuinely broken"
+# (only after retries are exhausted), and that the cross-run politeness
+# clock (Source.last_request_at) is actually read back and honoured by a
+# LATER, separate collect() call -- the exact scenario ("run the pipeline
+# twice in close succession") that tripped the original bug.
+
+ARXIV_FIX = Path(__file__).parent / "fixtures" / "sample_arxiv.xml"
+# sample_arxiv.xml's entries are dated well before NOW/the frozen clocks
+# below -- a generous backfill cap keeps _effective_since from filtering
+# them out, which is irrelevant to what these tests are actually proving
+# (429 handling / cross-run pacing, not the A4 backfill cap).
+_NO_BACKFILL_CAP = CollectConfig(max_backfill_days=3650)
+
+
+def _http_429():
+    import httpx
+    request = httpx.Request("GET", "https://export.arxiv.org/api/query")
+    response = httpx.Response(429, request=request)
+    return httpx.HTTPStatusError("429 rate limited", request=request, response=response)
+
+
+def test_collect_does_not_degrade_source_when_429_is_retried_and_succeeds(session, monkeypatch):
+    import feed.sources.arxiv as arxiv_module
+    calls = {"n": 0}
+    xml_bytes = ARXIV_FIX.read_bytes()
+
+    def flaky_get(url, *, timeout):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _http_429()
+        return xml_bytes
+
+    monkeypatch.setattr(arxiv_module, "_get", flaky_get)
+    _add_source(session, id="arxiv:ai", plugin="arxiv",
+               config={"categories": ["cs.AI"]})
+
+    res = collect(session, now=NOW, cfg=_NO_BACKFILL_CAP)
+
+    assert "arxiv:ai" not in res.source_errors
+    src = session.get(Source, "arxiv:ai")
+    assert src.consecutive_failures == 0
+    assert src.last_error is None
+    assert res.new_items > 0
+    assert calls["n"] == 2  # proves it genuinely retried, not a lucky first call
+
+
+def test_collect_degrades_source_only_after_429_retries_exhausted(session, monkeypatch):
+    import feed.sources.arxiv as arxiv_module
+
+    def always_429(url, *, timeout):
+        raise _http_429()
+
+    monkeypatch.setattr(arxiv_module, "_get", always_429)
+    _add_source(session, id="arxiv:ai", plugin="arxiv",
+               config={"categories": ["cs.AI"], "max_retries": 1, "retry_backoff_base": 0.01})
+
+    res = collect(session, now=NOW, cfg=_NO_BACKFILL_CAP)
+
+    assert "arxiv:ai" in res.source_errors
+    src = session.get(Source, "arxiv:ai")
+    assert src.consecutive_failures == 1
+    assert "429" in src.last_error
+
+
+def test_collect_persists_and_honours_last_request_at_across_two_separate_runs(session, monkeypatch):
+    """The actual A1-followup regression: two separate collect() calls
+    (standing in for two separate `feed run` process invocations) close
+    together in wall-clock time. The second must pace its opening request
+    against the FIRST run's last request, read back from the DB -- an
+    in-memory-only timestamp cannot do this, since each collect() call
+    here uses a freshly-built ArxivSource with no memory of the first.
+    """
+    import feed.sources.arxiv as arxiv_module
+    from datetime import datetime as real_datetime
+
+    class _FrozenClock(real_datetime):
+        current: "real_datetime | None" = None
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current
+
+    monkeypatch.setattr(arxiv_module, "datetime", _FrozenClock)
+    sleeps: list[float] = []
+    monkeypatch.setattr(arxiv_module, "_sleep", lambda s: sleeps.append(s))
+    xml_bytes = ARXIV_FIX.read_bytes()
+    monkeypatch.setattr(arxiv_module, "_get", lambda url, *, timeout: xml_bytes)
+
+    _add_source(session, id="arxiv:ai", plugin="arxiv",
+               config={"categories": ["cs.AI"], "rate_limit_seconds": 3.0},
+               cadence_minutes=0)
+
+    t1 = real_datetime(2026, 8, 22, 12, 0, 0, tzinfo=timezone.utc)
+    _FrozenClock.current = t1
+    collect(session, now=t1, cfg=_NO_BACKFILL_CAP)
+    src = session.get(Source, "arxiv:ai")
+    assert src.last_request_at == t1
+    assert sleeps == []  # nothing to pace against on the very first request ever
+
+    # A second, independent collect() call 1s later -- well under the 3s
+    # politeness delay. Without last_request_at surviving in the DB, this
+    # would sleep 0s (a brand-new ArxivSource sees last_request_at=None)
+    # and land right on the first run's heels, exactly like the live bug.
+    t2 = t1 + timedelta(seconds=1)
+    _FrozenClock.current = t2
+    collect(session, now=t2, cfg=_NO_BACKFILL_CAP)
+    src = session.get(Source, "arxiv:ai")
+    assert sleeps == [pytest.approx(2.0)]  # 3.0s owed - 1.0s elapsed
+    assert src.last_request_at == t2

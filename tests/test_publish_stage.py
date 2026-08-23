@@ -255,6 +255,38 @@ def test_publish_falls_back_to_the_only_item_with_an_image_regardless_of_authori
     assert page["stories"][0]["lead_image_url"] == "https://img.example.com/only-one.jpg"
 
 
+# --- web source/territory filter: FeedPageStory.source_ids ---------------
+
+def test_publish_includes_sorted_distinct_source_ids_per_story(session, tmp_path):
+    now = datetime.now(timezone.utc)
+    session.add(Source(id="zzz_source", plugin="rss", config={}, cadence_minutes=30))
+    session.add(Source(id="aaa_source", plugin="rss", config={}, cadence_minutes=30))
+    session.flush()
+    story = Story(title="Multi-source story", first_seen=now, updated_at=now,
+                 item_count=3, outlet_count=2, score=0.8, score_breakdown={},
+                 centroid=pack(np.ones(4, dtype=np.float32)))
+    session.add(story)
+    session.flush()
+    # Two items from the same source plus one from another -- proves the
+    # set is de-duplicated, not just a per-item list, and sorted
+    # regardless of insertion order.
+    session.add(Item(source_id="zzz_source", url="http://x/1", url_hash="sid-1",
+                     title="one", story_id=story.id, published_at=now,
+                     embedding_model_id="test-model/v1"))
+    session.add(Item(source_id="zzz_source", url="http://x/2", url_hash="sid-2",
+                     title="two", story_id=story.id, published_at=now,
+                     embedding_model_id="test-model/v1"))
+    session.add(Item(source_id="aaa_source", url="http://x/3", url_hash="sid-3",
+                     title="three", story_id=story.id, published_at=now,
+                     embedding_model_id="test-model/v1"))
+    session.commit()
+
+    publish(session, PublishConfig(), tmp_path)
+    manifest = _read_json(tmp_path / "manifest.json")
+    page = _read_json(tmp_path / manifest["pages"][0]["path"])
+    assert page["stories"][0]["source_ids"] == ["aaa_source", "zzz_source"]
+
+
 def test_publish_refuses_to_write_anything_when_schema_validation_fails(session, tmp_path, monkeypatch):
     """Reproduces spec 6's requirement directly: if a payload smuggles in a
     disallowed field (simulating a future regression that tries to leak

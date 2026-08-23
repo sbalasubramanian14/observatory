@@ -51,6 +51,24 @@ UNRELIABLE_IMAGE_HOSTS = ("research.facebook.com", "fbcdn.net")
 # "retry later" is a raised network-level exception (timeout, DNS failure,
 # connection reset), which leaves image_checked_at unset. See
 # ImageFetchResult.status and _needs_image_fetch below.
+#
+# A1-followup deliberately did NOT give this 429 the arXiv-style
+# retry-with-backoff treatment (feed.sources.arxiv._live_get_page), even
+# though the live symptom that prompted that fix -- VentureBeat article
+# pages returning 429 during image fetching, while VentureBeat's own RSS
+# feed stays healthy -- looks superficially similar. Two things make it a
+# different case: (1) this 429 never touches Source.consecutive_failures
+# or the sources health page at all -- it is scoped to one item's
+# cosmetic lead image, collected via a completely separate path from
+# collect()'s connector-health tracking, so it can never manufacture a
+# false Degraded reading the way the arXiv one did; (2) og:image is
+# explicitly non-critical (see fetch_og_image's docstring), so spending
+# extra latency/requests retrying a blocked image scrape has a worse
+# cost/benefit than retrying a whole connector's collection run. If a
+# publisher's 429 here ever turns out to be genuinely transient rather
+# than a standing bot-block, the fix is to add it to NO_RETRY_STATUSES's
+# opposite -- not to bolt retry logic onto this already-bulk, already
+# per-host-throttled path.
 NO_RETRY_STATUSES = frozenset({403, 202, 429})
 
 DEFAULT_TIMEOUT = 15.0

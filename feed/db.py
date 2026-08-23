@@ -51,6 +51,10 @@ _SOURCE_NEW_COLUMNS: dict[str, str] = {
     # Added for the source catalogue / `feed sources sync` (spec 2's four
     # coverage territories). Same additive-migration reasoning as above.
     "territory": "VARCHAR(32)",
+    # A1-followup: cross-run politeness-delay persistence for rate-limited
+    # source plugins (see feed.models.Source.last_request_at's docstring).
+    # Same additive-migration reasoning as above.
+    "last_request_at": "DATETIME",
 }
 
 # Phase D (lead images): `item.image_url`. Same additive-migration

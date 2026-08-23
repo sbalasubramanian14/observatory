@@ -69,6 +69,15 @@ class FeedPageStory(_Strict):
     # See StoryDetail.lead_image_url -- carried here too so the feed card
     # can render an image without a second fetch to the detail file.
     lead_image_url: str | None = None
+    # Web source/territory filter: the distinct set of source ids across
+    # this story's contributing items, sorted for a stable, diffable
+    # bundle. A story clusters items from possibly-multiple sources (spec
+    # A1's whole point), and territory itself only lives per-source
+    # (sources.json) -- so a client-side filter needs this list to know
+    # whether ANY of a story's items match a selected source or territory,
+    # without fetching every story's full detail file just to filter the
+    # main list. Never empty for a story that made it through cluster().
+    source_ids: list[str]
 
 
 class FeedPage(_Strict):

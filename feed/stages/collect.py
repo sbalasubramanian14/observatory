@@ -70,8 +70,16 @@ def collect(
         # success commit -- is now one unit: any failure anywhere in it
         # rolls back and is recorded exactly like a fetch() failure always
         # was, and the loop moves on to the next source.
+        plugin = None
         try:
             plugin = build_source(src.plugin, src.id, dict(src.config or {}))
+            # A1-followup: hand a rate-limit-aware plugin (currently only
+            # ArxivSource) the persisted cross-run pacing clock before it
+            # makes any request. Purely duck-typed -- plugins that don't
+            # declare this attribute (every other current source) are
+            # untouched, so this never affects them.
+            if hasattr(plugin, "last_request_at"):
+                plugin.last_request_at = src.last_request_at
             raw_items = list(plugin.fetch(since=effective_since))
 
             # Spec A4: log + persist visibly when the cap actually narrowed
@@ -138,6 +146,9 @@ def collect(
             src.last_error = None
             src.consecutive_failures = 0
             src.coverage_warning = "; ".join(warnings) if warnings else None
+            new_last_request_at = getattr(plugin, "last_request_at", None)
+            if new_last_request_at is not None:
+                src.last_request_at = new_last_request_at
             session.commit()
             result.new_items += new_items
             result.skipped_duplicates += skipped_duplicates
@@ -157,6 +168,14 @@ def collect(
             if fresh is not None:
                 fresh.consecutive_failures += 1
                 fresh.last_error = error
+                # Even a fully-failed fetch (retries exhausted) made real
+                # requests -- the pacing clock must reflect the LAST one,
+                # not be left stale, or the next run's opening request
+                # would under-wait and risk tripping straight into another
+                # 429.
+                new_last_request_at = getattr(plugin, "last_request_at", None)
+                if new_last_request_at is not None:
+                    fresh.last_request_at = new_last_request_at
                 session.commit()
             result.source_errors[src.id] = error
             log.warning("source=%s fetch failed: %s", src.id, exc)

@@ -3,8 +3,9 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 import feedparser
 import httpx
 from feed.sources.base import RawItem
@@ -19,11 +20,50 @@ def _get(url: str, *, timeout: float) -> bytes:
     """The real-network seam. Tests must monkeypatch this (or use
     path=/paths= fixture loading, which never calls this), never let it
     run for real -- see tests/conftest.py's autouse guard.
+
+    Deliberately still a single, un-retried request: retry-with-backoff
+    lives one level up, in ArxivSource._live_get_page, so tests can
+    monkeypatch THIS seam to return a 429 on call N and a real payload on
+    call N+1 and thereby exercise the retry loop for real, rather than
+    retrying happening invisibly inside a seam tests can't see into.
     """
     resp = httpx.get(url, timeout=timeout,
                       headers={"User-Agent": "feed/0.1 (personal reader)"})
     resp.raise_for_status()
     return resp.content
+
+
+def _sleep(seconds: float) -> None:
+    """The real-delay seam, mirroring feed.providers._retry._sleep and
+    feed.imaging._sleep. Tests must monkeypatch this to a no-op (see
+    tests/conftest.py's autouse `_no_real_arxiv_sleep`) rather than let the
+    suite genuinely block for the politeness delay or a 429 backoff.
+    """
+    time.sleep(seconds)
+
+
+def _parse_retry_after(value: str | None, *, now: datetime) -> float | None:
+    """Parses a `Retry-After` header value, which per RFC 9110 is either a
+    plain integer number of seconds or an HTTP-date. Returns None if the
+    header is absent or unparseable as either form -- callers fall back to
+    exponential backoff in that case.
+    """
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        dt = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return max(0.0, (dt - now).total_seconds())
 
 
 @register("arxiv")
@@ -43,10 +83,29 @@ class ArxivSource:
     `max_pages` safety cap is hit (a defensive bound in case `since` is
     None or the feed misbehaves), or the API itself runs out of results.
 
-    Rate limit: arXiv's API asks for ~3 seconds between requests. A real
-    (non-fixture) multi-page fetch sleeps `rate_limit_seconds` (default
-    3.0) between page requests; fixture-backed fetches (path=/paths=)
-    never sleep, since they never call the network.
+    Rate limit / A1-followup: arXiv's API asks for ~3 seconds between
+    requests. Every live request -- the first page of a run as well as
+    every later page -- goes through _live_get_page, which waits out
+    `rate_limit_seconds` since the LAST request this source actually made
+    (self.last_request_at) before issuing the next one. That timestamp is
+    read from and written back to the persisted Source.last_request_at
+    column by feed.stages.collect (via plain attribute get/set -- see its
+    docstring), so the delay is honoured ACROSS separate `feed run`
+    invocations, not just between pages within one. Without that, a run's
+    very first request had no delay at all: two runs close together could
+    land the second run's opening request right on the heels of the first
+    run's last page, which is what tripped the 429 this fixes.
+
+    A live request that comes back 429 is retried up to `max_retries`
+    times with exponential backoff (`retry_backoff_base * 2**attempt`),
+    honouring the response's `Retry-After` header when present instead of
+    the computed backoff. Only once retries are exhausted does the 429
+    propagate as a real failure -- collect() only marks a source Degraded
+    (increments consecutive_failures) for THAT, never for a throttle that
+    a retry cleared, since a transient 429 is not "this connector is
+    broken", which is what the health page is supposed to report.
+    Fixture-backed fetches (path=/paths=) never sleep or retry, since they
+    never call the network.
     """
 
     API = "https://export.arxiv.org/api/query"
@@ -54,8 +113,14 @@ class ArxivSource:
     def __init__(self, source_id: str, categories: list[str] | None = None,
                  max_results: int = 100, path: str | None = None,
                  paths: list[str] | None = None, timeout: float = 60.0,
-                 max_pages: int = 20, rate_limit_seconds: float = 3.0):
+                 max_pages: int = 20, rate_limit_seconds: float = 3.0,
+                 max_retries: int = 4, retry_backoff_base: float = 2.0,
+                 now: Callable[[], datetime] | None = None):
         self.id = source_id
+        # Injectable clock (mirrors feed.providers.health.ProviderHealthTracker),
+        # so pacing/retry-delay tests can assert exact computed delays
+        # against a controlled clock instead of the real wall clock.
+        self._now = now or (lambda: datetime.now(timezone.utc))
         self.categories = categories or ["cs.AI", "cs.CL", "cs.LG"]
         self.max_results = max_results
         self.path = path
@@ -67,9 +132,60 @@ class ArxivSource:
         self.timeout = timeout
         self.max_pages = max_pages
         self.rate_limit_seconds = rate_limit_seconds
+        self.max_retries = max_retries
+        self.retry_backoff_base = retry_backoff_base
+        # A1-followup: cross-run politeness-delay state. None means "no
+        # prior request known" (first-ever run, or a source that predates
+        # this column). feed.stages.collect sets this from the persisted
+        # Source.last_request_at before calling fetch(), and reads it back
+        # afterwards to persist whatever this instance last set it to --
+        # see feed.models.Source.last_request_at's docstring. Purely
+        # duck-typed: collect() only touches this attribute when it's
+        # present, so no other source plugin is affected.
+        self.last_request_at: datetime | None = None
 
-    def _is_live(self) -> bool:
-        return self.path is None and self.paths is None
+    def _wait_for_pace(self) -> None:
+        if self.last_request_at is None:
+            return
+        elapsed = (self._now() - self.last_request_at).total_seconds()
+        remaining = self.rate_limit_seconds - elapsed
+        if remaining > 0:
+            _sleep(remaining)
+
+    def _live_get_page(self, url: str) -> bytes:
+        """Issues one live request, waiting out the politeness delay first
+        and retrying a 429 with backoff. Stamps self.last_request_at on
+        EVERY attempt (successful or not) since each attempt is a real
+        request against arXiv's rate limiter, not just the final one that
+        happens to succeed.
+        """
+        attempt = 0
+        while True:
+            self._wait_for_pace()
+            try:
+                content = _get(url, timeout=self.timeout)
+                self.last_request_at = self._now()
+                return content
+            except httpx.HTTPStatusError as exc:
+                self.last_request_at = self._now()
+                status = exc.response.status_code if exc.response is not None else None
+                if status != 429 or attempt >= self.max_retries:
+                    raise
+                now = self._now()
+                retry_after = _parse_retry_after(
+                    exc.response.headers.get("Retry-After") if exc.response is not None else None,
+                    now=now,
+                )
+                delay = retry_after if retry_after is not None else (
+                    self.retry_backoff_base * (2 ** attempt)
+                )
+                log.warning(
+                    "arxiv: source=%s got 429, retrying in %.1fs (attempt %d/%d)%s",
+                    self.id, delay, attempt + 1, self.max_retries,
+                    " [Retry-After honoured]" if retry_after is not None else "",
+                )
+                _sleep(delay)
+                attempt += 1
 
     def _fetch_page(self, start: int) -> bytes | None:
         """Returns None to mean "no more pages" (fixture list exhausted,
@@ -87,10 +203,9 @@ class ArxivSource:
         url = (f"{self.API}?search_query={query}&start={start}"
                f"&max_results={self.max_results}&sortBy=submittedDate"
                f"&sortOrder=descending")
-        return _get(url, timeout=self.timeout)
+        return self._live_get_page(url)
 
     def fetch(self, since: datetime | None) -> Iterable[RawItem]:
-        live = self._is_live()
         start = 0
         page_num = 0
         while True:
@@ -138,5 +253,9 @@ class ArxivSource:
                 )
                 break
             start += self.max_results
-            if live:
-                time.sleep(self.rate_limit_seconds)
+            # No explicit sleep here: the next iteration's _fetch_page ->
+            # _live_get_page calls _wait_for_pace() itself before issuing
+            # the request, which is what now unifies the between-page
+            # delay with the cross-run one described in the class
+            # docstring. Fixture-backed fetches never reach
+            # _live_get_page at all, so this is a no-op for tests.

@@ -168,6 +168,21 @@ def _no_real_retry_sleep(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_arxiv_sleep(monkeypatch):
+    """feed.sources.arxiv.ArxivSource backs off with a real time.sleep()
+    both for its cross-run/between-page politeness delay (_wait_for_pace)
+    and for 429 retry backoff (_live_get_page) in production. Same
+    rationale as `_no_real_retry_sleep` above: left un-mocked, a test
+    exercising either path would genuinely block for real wall-clock time.
+    A test that exists specifically to prove the real delay/backoff
+    behaviour should restore the real seam locally
+    (monkeypatch.setattr(arxiv, "_sleep", time.sleep)), not rely on this
+    guard being absent.
+    """
+    monkeypatch.setattr("feed.sources.arxiv._sleep", lambda seconds: None)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_imaging_sleep(monkeypatch):
     """feed.imaging.HostThrottle backs off with a real time.sleep()
     between two requests to the same host in production (the politeness

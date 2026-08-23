@@ -125,6 +125,9 @@ def _feed_page_story_dict(story: Story, *, detail_path: str, detail_hash: str) -
         "detail_path": detail_path,
         "detail_hash": detail_hash,
         "lead_image_url": _lead_image_for(story),
+        # Web source/territory filter (see FeedPageStory.source_ids):
+        # sorted so the same membership always serializes identically.
+        "source_ids": sorted({it.source_id for it in story.items}),
     }
 
 
