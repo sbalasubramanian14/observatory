@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterable
 import feedparser
 import httpx
-from feed.sources.base import RawItem, canonical_url
+from feed.sources.base import RawItem, canonical_url, extract_feed_image
 from feed.sources.registry import register
 
 log = logging.getLogger(__name__)
@@ -66,6 +66,7 @@ class RssSource:
                 title=(entry.get("title") or "").strip(),
                 summary=(entry.get("summary") or None),
                 published_at=published,
+                image_url=extract_feed_image(entry),
             )
 
         # Spec A3: a feed document only ever carries the publisher's last N

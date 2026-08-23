@@ -126,6 +126,7 @@ def collect(
                     url_hash=h,
                     title=raw.title,
                     summary=raw.summary,
+                    image_url=raw.image_url,
                     outbound_links=raw.outbound_links or [],
                     published_at=raw.published_at,
                     fetched_at=now,

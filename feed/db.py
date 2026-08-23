@@ -53,6 +53,22 @@ _SOURCE_NEW_COLUMNS: dict[str, str] = {
     "territory": "VARCHAR(32)",
 }
 
+# Phase D (lead images): `item.image_url`. Same additive-migration
+# reasoning as above -- an existing feed.db's `item` table predates this
+# column. Unlike _STORY_NEW_COLUMNS's `status` (whose Python-side default
+# of StoryStatus.NEW is silently NOT applied to existing rows by a plain
+# ALTER TABLE ADD COLUMN -- existing rows read back NULL, not "new", which
+# then falls out of feed.stages.enrich's `Story.status == StoryStatus.NEW`
+# filter and gets silently skipped forever), NULL is the semantically
+# correct value here for every pre-existing row: "no lead image known for
+# this item" is not a wrong default that needs backfilling, it is the
+# truth (the source feeds these items came from were never asked for an
+# image, and normalize() only fills this in for items it processes going
+# forward). No UPDATE needed.
+_ITEM_NEW_COLUMNS: dict[str, str] = {
+    "image_url": "TEXT",
+}
+
 
 def _add_missing_columns(conn, table: str, columns: dict[str, str]) -> None:
     existing = {
@@ -76,6 +92,8 @@ def _migrate_sqlite(engine: Engine) -> None:
             _add_missing_columns(conn, "story", _STORY_NEW_COLUMNS)
         if "source" in tables:
             _add_missing_columns(conn, "source", _SOURCE_NEW_COLUMNS)
+        if "item" in tables:
+            _add_missing_columns(conn, "item", _ITEM_NEW_COLUMNS)
 
 
 def create_all(engine: Engine) -> None:

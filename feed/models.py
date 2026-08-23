@@ -114,6 +114,17 @@ class Item(Base):
     summary: Mapped[str | None] = mapped_column(Text)
     text: Mapped[str | None] = mapped_column(Text)
     outbound_links: Mapped[list | None] = mapped_column(JSON)
+    # Lead image URL (spec D0). Populated either from the source feed's own
+    # media:content/media:thumbnail/enclosure (feed.sources.base.RawItem.image_url,
+    # set at collect time) or, failing that, the article page's
+    # og:image/twitter:image meta tag (set at normalize time). NULL means
+    # "no image found" -- a normal, common, and permanent outcome for many
+    # items, not a pending state that gets filled in later. Additive column
+    # (see feed/db.py's _ITEM_NEW_COLUMNS): existing rows read back NULL,
+    # which is exactly the correct "no image" value here, so unlike the
+    # story.status additive migration this needs no backfill -- there is no
+    # wrong default to accidentally leave existing rows on.
+    image_url: Mapped[str | None] = mapped_column(Text)
     published_at: Mapped[datetime | None] = mapped_column(UtcDateTime, index=True)
     fetched_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary)

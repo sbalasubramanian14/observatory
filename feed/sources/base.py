@@ -16,12 +16,55 @@ class RawItem:
     summary: str | None = None
     published_at: datetime | None = None
     outbound_links: list[str] = field(default_factory=list)
+    # A publisher-supplied lead image, if the source's own feed carried one
+    # (RSS <media:content>/<media:thumbnail>/<enclosure type="image/*">,
+    # spec D0). None here does NOT mean "no image exists" -- it means this
+    # source plugin didn't find one in its own feed; the normalize stage
+    # falls back to the article page's og:image/twitter:image meta tag.
+    image_url: str | None = None
 
 
 class Source(Protocol):
     id: str
 
     def fetch(self, since: datetime | None) -> Iterable[RawItem]: ...
+
+
+def extract_feed_image(entry: dict) -> str | None:
+    """Pull a lead image URL out of a feedparser entry, in priority order:
+    Media RSS <media:content>, <media:thumbnail>, then a plain <enclosure>
+    whose type is image/*. Returns None if the entry carries none of these
+    -- the normal case for most feeds, and NOT an error; callers fall back
+    to the og:image scrape in feed.stages.normalize.
+
+    feedparser exposes these as (verified against feedparser 6.0.14):
+      entry.media_content   -> [{"url": ..., "medium": "image", ...}, ...] | None
+      entry.media_thumbnail -> [{"url": ...}, ...] | None
+      entry.enclosures      -> [{"href": ..., "type": "image/jpeg"}, ...]
+    """
+    media_content = entry.get("media_content") or []
+    for m in media_content:
+        url = m.get("url")
+        if not url:
+            continue
+        medium = m.get("medium")
+        mtype = (m.get("type") or "").lower()
+        if medium == "image" or mtype.startswith("image/") or (not medium and not mtype):
+            return url
+
+    media_thumbnail = entry.get("media_thumbnail") or []
+    for m in media_thumbnail:
+        url = m.get("url")
+        if url:
+            return url
+
+    for enc in entry.get("enclosures") or []:
+        etype = (enc.get("type") or "").lower()
+        href = enc.get("href") or enc.get("url")
+        if href and etype.startswith("image/"):
+            return href
+
+    return None
 
 
 def canonical_url(url: str) -> str:

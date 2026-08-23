@@ -66,6 +66,30 @@ def _evidence_for(story: Story) -> list[dict]:
     ]
 
 
+def _lead_image_for(story: Story) -> str | None:
+    """spec D0: "Pick the story's lead image from its highest-authority
+    item." Computed fresh on every publish, from the story's CURRENT
+    members, rather than cached on a Story column -- deliberately, so it
+    is correct for stories whose items were all clustered before this
+    feature existed (see feed.models.Item.image_url's docstring: cluster()
+    only revisits an item when it moves through Stage.EMBEDDED, so a
+    column populated only there would silently never backfill old,
+    already-clustered stories -- exactly the "additive migration forgot to
+    backfill" trap this stage avoids by not caching at all).
+
+    Ties (equal authority) break on lowest item id, i.e. the earliest
+    contributing item, for a stable and reproducible choice.
+    """
+    candidates = [
+        (it.source.authority, it.id, it.image_url)
+        for it in story.items if it.image_url
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: (-c[0], c[1]))
+    return candidates[0][2]
+
+
 def _story_detail_dict(story: Story) -> dict:
     return {
         "id": story.id,
@@ -82,6 +106,7 @@ def _story_detail_dict(story: Story) -> dict:
         "updated_at": _iso(story.updated_at),
         "item_count": story.item_count,
         "outlet_count": story.outlet_count,
+        "lead_image_url": _lead_image_for(story),
         "evidence": _evidence_for(story),
     }
 
@@ -99,6 +124,7 @@ def _feed_page_story_dict(story: Story, *, detail_path: str, detail_hash: str) -
         "updated_at": _iso(story.updated_at),
         "detail_path": detail_path,
         "detail_hash": detail_hash,
+        "lead_image_url": _lead_image_for(story),
     }
 
 

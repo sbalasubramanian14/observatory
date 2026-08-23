@@ -41,6 +41,14 @@ class StoryDetail(_Strict):
     updated_at: str
     item_count: int
     outlet_count: int
+    # spec D0: the story's lead image URL, picked from its highest-authority
+    # contributing item (see feed.stages.publish._lead_image_for). A URL
+    # reference, never image bytes -- spec 4.2's "no full article text"
+    # exclusion is about redistributing copyrighted body text, not linking
+    # to a publisher-hosted image, so this does not violate it. None is the
+    # common case (most stories have no usable image) and clients must
+    # render that gracefully, not as an error.
+    lead_image_url: str | None = None
     evidence: list[StoryEvidence]
 
 
@@ -58,6 +66,9 @@ class FeedPageStory(_Strict):
     updated_at: str
     detail_path: str
     detail_hash: str
+    # See StoryDetail.lead_image_url -- carried here too so the feed card
+    # can render an image without a second fetch to the detail file.
+    lead_image_url: str | None = None
 
 
 class FeedPage(_Strict):

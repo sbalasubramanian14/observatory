@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+<channel>
+  <title>Example Image Shapes Feed</title>
+  <item>
+    <title>Media content item</title>
+    <link>https://example.com/media-content</link>
+    <description>Story with a media:content image.</description>
+    <pubDate>Tue, 18 Aug 2026 09:00:00 GMT</pubDate>
+    <media:content url="https://img.example.com/media-content.jpg" medium="image" type="image/jpeg"/>
+  </item>
+  <item>
+    <title>Media thumbnail item</title>
+    <link>https://example.com/media-thumbnail</link>
+    <description>Story with a media:thumbnail image.</description>
+    <pubDate>Tue, 18 Aug 2026 09:05:00 GMT</pubDate>
+    <media:thumbnail url="https://img.example.com/media-thumbnail.jpg"/>
+  </item>
+  <item>
+    <title>Enclosure image item</title>
+    <link>https://example.com/enclosure-image</link>
+    <description>Story with an image enclosure.</description>
+    <pubDate>Tue, 18 Aug 2026 09:10:00 GMT</pubDate>
+    <enclosure url="https://img.example.com/enclosure.jpg" type="image/png" length="1234"/>
+  </item>
+  <item>
+    <title>Enclosure non-image item</title>
+    <link>https://example.com/enclosure-audio</link>
+    <description>Story with a non-image (podcast) enclosure -- must not be picked up as a lead image.</description>
+    <pubDate>Tue, 18 Aug 2026 09:15:00 GMT</pubDate>
+    <enclosure url="https://cdn.example.com/episode.mp3" type="audio/mpeg" length="1234"/>
+  </item>
+  <item>
+    <title>No image item</title>
+    <link>https://example.com/no-image</link>
+    <description>Story with no image shape at all.</description>
+    <pubDate>Tue, 18 Aug 2026 09:20:00 GMT</pubDate>
+  </item>
+</channel>
+</rss>

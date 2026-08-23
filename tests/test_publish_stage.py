@@ -188,6 +188,73 @@ def test_publish_includes_sources_health(session, tmp_path):
     assert broken["consecutive_failures"] == 3
 
 
+# --- D0: lead image selection --------------------------------------------
+
+def test_publish_omits_lead_image_when_no_item_has_one(session, tmp_path):
+    _seed_story(session, story_id_hint="noimg", score=0.7)
+    publish(session, PublishConfig(), tmp_path)
+    manifest = _read_json(tmp_path / "manifest.json")
+    page = _read_json(tmp_path / manifest["pages"][0]["path"])
+    assert page["stories"][0]["lead_image_url"] is None
+    detail = _read_json(tmp_path / page["stories"][0]["detail_path"])
+    assert detail["lead_image_url"] is None
+
+
+def test_publish_picks_lead_image_from_the_highest_authority_item(session, tmp_path):
+    now = datetime.now(timezone.utc)
+    session.add(Source(id="low_authority", plugin="rss", config={}, cadence_minutes=30,
+                       authority=0.2))
+    session.add(Source(id="high_authority", plugin="rss", config={}, cadence_minutes=30,
+                       authority=0.9))
+    session.flush()
+    story = Story(title="Multi-source story", first_seen=now, updated_at=now,
+                 item_count=2, outlet_count=2, score=0.8, score_breakdown={},
+                 centroid=pack(np.ones(4, dtype=np.float32)))
+    session.add(story)
+    session.flush()
+    session.add(Item(source_id="low_authority", url="http://x/low", url_hash="lead-low",
+                     title="low", story_id=story.id, published_at=now,
+                     embedding_model_id="test-model/v1",
+                     image_url="https://img.example.com/low-authority.jpg"))
+    session.add(Item(source_id="high_authority", url="http://x/high", url_hash="lead-high",
+                     title="high", story_id=story.id, published_at=now,
+                     embedding_model_id="test-model/v1",
+                     image_url="https://img.example.com/high-authority.jpg"))
+    session.commit()
+
+    publish(session, PublishConfig(), tmp_path)
+    manifest = _read_json(tmp_path / "manifest.json")
+    page = _read_json(tmp_path / manifest["pages"][0]["path"])
+    assert page["stories"][0]["lead_image_url"] == "https://img.example.com/high-authority.jpg"
+    detail = _read_json(tmp_path / page["stories"][0]["detail_path"])
+    assert detail["lead_image_url"] == "https://img.example.com/high-authority.jpg"
+
+
+def test_publish_falls_back_to_the_only_item_with_an_image_regardless_of_authority(session, tmp_path):
+    now = datetime.now(timezone.utc)
+    session.add(Source(id="low2", plugin="rss", config={}, cadence_minutes=30, authority=0.1))
+    session.add(Source(id="high2", plugin="rss", config={}, cadence_minutes=30, authority=0.9))
+    session.flush()
+    story = Story(title="Only one has an image", first_seen=now, updated_at=now,
+                 item_count=2, outlet_count=2, score=0.8, score_breakdown={},
+                 centroid=pack(np.ones(4, dtype=np.float32)))
+    session.add(story)
+    session.flush()
+    session.add(Item(source_id="high2", url="http://x/high2", url_hash="lead-high2",
+                     title="high, no image", story_id=story.id, published_at=now,
+                     embedding_model_id="test-model/v1"))
+    session.add(Item(source_id="low2", url="http://x/low2", url_hash="lead-low2",
+                     title="low, has image", story_id=story.id, published_at=now,
+                     embedding_model_id="test-model/v1",
+                     image_url="https://img.example.com/only-one.jpg"))
+    session.commit()
+
+    publish(session, PublishConfig(), tmp_path)
+    manifest = _read_json(tmp_path / "manifest.json")
+    page = _read_json(tmp_path / manifest["pages"][0]["path"])
+    assert page["stories"][0]["lead_image_url"] == "https://img.example.com/only-one.jpg"
+
+
 def test_publish_refuses_to_write_anything_when_schema_validation_fails(session, tmp_path, monkeypatch):
     """Reproduces spec 6's requirement directly: if a payload smuggles in a
     disallowed field (simulating a future regression that tries to leak

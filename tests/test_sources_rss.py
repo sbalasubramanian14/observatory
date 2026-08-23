@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
 from pathlib import Path
-from feed.sources.base import canonical_url, url_hash
+from feed.sources.base import canonical_url, extract_feed_image, url_hash
 from feed.sources.registry import build_source
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_rss.xml"
 UNDATED_FIXTURE = Path(__file__).parent / "fixtures" / "sample_rss_undated.xml"
+IMAGES_FIXTURE = Path(__file__).parent / "fixtures" / "sample_rss_images.xml"
 
 def test_canonical_url_strips_tracking_params():
     got = canonical_url("https://example.com/a?utm_source=rss&utm_medium=feed&id=7")
@@ -49,6 +50,63 @@ def test_undated_item_survives_the_since_filter():
     # The dated entry, safely before the cutoff, is correctly filtered out --
     # proving this isn't just a case where the filter does nothing at all.
     assert "DeepSeek releases V4" not in titles
+
+
+# --- D0: lead image extraction shapes -----------------------------------
+#
+# Spec D0: publishers expose a lead image via media:content, media:thumbnail,
+# or an image-typed enclosure, in that priority order. A non-image enclosure
+# (e.g. a podcast .mp3) must never be picked up as an image, and an entry
+# with none of these shapes must yield None -- not an error, not a guess.
+
+def test_media_content_image_is_extracted():
+    src = build_source("rss", "rss:img", {"path": str(IMAGES_FIXTURE)})
+    items = {i.title: i for i in src.fetch(since=None)}
+    assert items["Media content item"].image_url == "https://img.example.com/media-content.jpg"
+
+def test_media_thumbnail_image_is_extracted():
+    src = build_source("rss", "rss:img", {"path": str(IMAGES_FIXTURE)})
+    items = {i.title: i for i in src.fetch(since=None)}
+    assert items["Media thumbnail item"].image_url == "https://img.example.com/media-thumbnail.jpg"
+
+def test_image_enclosure_is_extracted():
+    src = build_source("rss", "rss:img", {"path": str(IMAGES_FIXTURE)})
+    items = {i.title: i for i in src.fetch(since=None)}
+    assert items["Enclosure image item"].image_url == "https://img.example.com/enclosure.jpg"
+
+def test_non_image_enclosure_is_not_picked_up_as_an_image():
+    src = build_source("rss", "rss:img", {"path": str(IMAGES_FIXTURE)})
+    items = {i.title: i for i in src.fetch(since=None)}
+    assert items["Enclosure non-image item"].image_url is None
+
+def test_entry_with_no_image_shape_yields_none():
+    src = build_source("rss", "rss:img", {"path": str(IMAGES_FIXTURE)})
+    items = {i.title: i for i in src.fetch(since=None)}
+    assert items["No image item"].image_url is None
+
+def test_extract_feed_image_priority_prefers_media_content_over_thumbnail_and_enclosure():
+    # A single entry offering all three shapes at once must resolve to
+    # media:content, per spec D0's stated priority order.
+    entry = {
+        "media_content": [{"url": "https://img.example.com/content.jpg", "medium": "image"}],
+        "media_thumbnail": [{"url": "https://img.example.com/thumb.jpg"}],
+        "enclosures": [{"href": "https://img.example.com/enc.jpg", "type": "image/jpeg"}],
+    }
+    assert extract_feed_image(entry) == "https://img.example.com/content.jpg"
+
+def test_extract_feed_image_falls_back_to_thumbnail_when_no_content():
+    entry = {
+        "media_thumbnail": [{"url": "https://img.example.com/thumb.jpg"}],
+        "enclosures": [{"href": "https://img.example.com/enc.jpg", "type": "image/jpeg"}],
+    }
+    assert extract_feed_image(entry) == "https://img.example.com/thumb.jpg"
+
+def test_extract_feed_image_falls_back_to_enclosure_when_no_media_tags():
+    entry = {"enclosures": [{"href": "https://img.example.com/enc.jpg", "type": "image/jpeg"}]}
+    assert extract_feed_image(entry) == "https://img.example.com/enc.jpg"
+
+def test_extract_feed_image_returns_none_for_bare_entry():
+    assert extract_feed_image({}) is None
 
 
 def test_unknown_plugin_raises():

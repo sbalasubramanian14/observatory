@@ -168,6 +168,123 @@ def test_plain_text_summary_with_no_markup_still_normalizes(session):
     assert item.text == "A perfectly ordinary plain-text summary, no markup at all."
 
 
+# --- D0: og:image / twitter:image fallback -------------------------------
+#
+# Priority chain (spec D0): a feed-supplied item.image_url (set at collect
+# time from media:content/thumbnail/enclosure) always wins; only when that
+# is None does normalize fall back to scraping the article page's
+# og:image, then twitter:image. Any fetch failure degrades to None rather
+# than failing the item -- a missing lead image is cosmetic.
+
+def test_feed_supplied_image_is_kept_and_og_image_fetch_is_never_attempted(session, monkeypatch):
+    def _fail_if_called(url):
+        raise AssertionError("og:image fallback must not be attempted when "
+                              "the feed already supplied an image")
+
+    monkeypatch.setattr(normalize_module, "_fetch_og_image", _fail_if_called)
+    item = _seed(session, url_hash="img1", url="https://example.com/has-image",
+                image_url="https://img.example.com/from-feed.jpg")
+    normalize_item(session, item)
+    session.commit()
+    assert item.image_url == "https://img.example.com/from-feed.jpg"
+
+
+def test_og_image_fallback_is_used_when_feed_supplied_no_image(session, monkeypatch):
+    monkeypatch.setattr(normalize_module, "_fetch_og_image",
+                        lambda url: "https://img.example.com/og.jpg")
+    item = _seed(session, url_hash="img2", url="https://example.com/no-feed-image")
+    assert item.image_url is None
+    normalize_item(session, item)
+    session.commit()
+    assert item.image_url == "https://img.example.com/og.jpg"
+
+
+def test_og_image_fallback_failure_degrades_to_none_not_a_raised_error(session, monkeypatch):
+    def _boom(url):
+        raise RuntimeError("network exploded")
+
+    monkeypatch.setattr(normalize_module, "_fetch_og_image", _boom)
+    item = _seed(session, url_hash="img3", url="https://example.com/broken-fetch")
+    normalize_item(session, item)  # must NOT raise
+    session.commit()
+    assert item.image_url is None
+    assert item.stage != Stage.FAILED
+
+
+def test_arxiv_item_never_attempts_og_image_fetch(session, monkeypatch):
+    def _fail_if_called(url):
+        raise AssertionError("arXiv items must never attempt the og:image fetch seam")
+
+    monkeypatch.setattr(normalize_module, "_fetch_og_image", _fail_if_called)
+    item = _seed(session, url_hash="img4", url="https://arxiv.org/abs/2607.09511")
+    normalize_item(session, item)
+    session.commit()
+    assert item.image_url is None
+
+
+def test_extract_og_image_prefers_og_image_over_twitter_image():
+    html = (
+        '<html><head>'
+        '<meta property="og:image" content="https://img.example.com/og.jpg"/>'
+        '<meta name="twitter:image" content="https://img.example.com/tw.jpg"/>'
+        '</head><body></body></html>'
+    )
+    assert normalize_module._extract_og_image(html, "https://example.com/page") == \
+        "https://img.example.com/og.jpg"
+
+
+def test_extract_og_image_falls_back_to_twitter_image():
+    html = (
+        '<html><head>'
+        '<meta name="twitter:image" content="https://img.example.com/tw.jpg"/>'
+        '</head><body></body></html>'
+    )
+    assert normalize_module._extract_og_image(html, "https://example.com/page") == \
+        "https://img.example.com/tw.jpg"
+
+
+def test_extract_og_image_resolves_relative_urls_against_the_page():
+    html = '<html><head><meta property="og:image" content="/assets/hero.jpg"/></head></html>'
+    assert normalize_module._extract_og_image(html, "https://example.com/articles/x") == \
+        "https://example.com/assets/hero.jpg"
+
+
+def test_extract_og_image_skips_known_unreliable_host_and_falls_through():
+    """research.facebook.com/file/... was measured live (2/2 sampled
+    articles) to return HTTP 400 for its own og:image URLs regardless of
+    Referer -- not hotlink protection a real browser request would pass,
+    a structurally broken URL shape. Confirm the extractor skips it and
+    still finds a usable twitter:image rather than returning the broken
+    URL."""
+    html = (
+        '<html><head>'
+        '<meta property="og:image" content="https://research.facebook.com/file/123/x.jpg"/>'
+        '<meta name="twitter:image" content="https://img.example.com/ok.jpg"/>'
+        '</head></html>'
+    )
+    assert normalize_module._extract_og_image(html, "https://research.facebook.com/blog/x") == \
+        "https://img.example.com/ok.jpg"
+
+
+def test_extract_og_image_returns_none_when_only_unreliable_host_available():
+    html = '<html><head><meta property="og:image" content="https://research.facebook.com/file/9/y.jpg"/></head></html>'
+    assert normalize_module._extract_og_image(html, "https://research.facebook.com/blog/y") is None
+
+
+def test_feed_supplied_image_on_unreliable_host_is_discarded(session, monkeypatch):
+    monkeypatch.setattr(normalize_module, "_fetch_og_image", lambda url: None)
+    item = _seed(session, url_hash="img6", url="https://research.facebook.com/blog/z",
+                image_url="https://research.facebook.com/file/7/z.jpg")
+    normalize_item(session, item)
+    session.commit()
+    assert item.image_url is None
+
+
+def test_extract_og_image_returns_none_when_no_meta_tags_present():
+    html = "<html><head><title>No image here</title></head><body></body></html>"
+    assert normalize_module._extract_og_image(html, "https://example.com/page") is None
+
+
 def test_non_arxiv_empty_summary_uses_fetch_seam_not_real_network(session, monkeypatch):
     """Risk 3 + the critical network-seam risk: a non-arXiv URL with an
     empty summary DOES take the fallback-fetch path. Prove that path goes
@@ -194,3 +311,23 @@ def test_non_arxiv_empty_summary_uses_fetch_seam_not_real_network(session, monke
     assert calls == ["https://example.com/some-article"]
     assert item.stage != Stage.FAILED
     assert "real extracted article text" in item.text.lower()
+
+
+def test_no_summary_and_no_feed_image_uses_both_fallback_seams(session, monkeypatch):
+    """The two fallbacks (full-text fetch, og:image fetch) are independent
+    seams -- an item needing both must consult both, and the result of each
+    must land in the right field."""
+    monkeypatch.setattr(
+        normalize_module, "_fetch_remote_text",
+        lambda url: "Real extracted article text goes here, well past the minimum length.",
+    )
+    monkeypatch.setattr(
+        normalize_module, "_fetch_og_image",
+        lambda url: "https://img.example.com/fallback.jpg",
+    )
+    item = _seed(session, url_hash="img5", summary="", title="",
+                url="https://example.com/needs-both")
+    normalize_item(session, item)
+    session.commit()
+    assert "real extracted article text" in item.text.lower()
+    assert item.image_url == "https://img.example.com/fallback.jpg"
