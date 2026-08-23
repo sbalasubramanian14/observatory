@@ -1,7 +1,9 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from feed.config import CollectConfig
 from feed.models import Item, Source, Stage
-from feed.stages.collect import collect
+from feed.stages.collect import _effective_since, collect
 
 FIX = Path(__file__).parent / "fixtures" / "sample_rss.xml"
 # Ruling: the brief's NOW (2026-08-19 12:00) is after both fixture items
@@ -145,3 +147,149 @@ def test_cross_source_url_hash_collision_dedupes(session):
     assert res.new_items == 2            # only the first-processed source's items are new
     assert res.skipped_duplicates == 2   # the other source's identical URLs dedupe
     assert session.query(Item).count() == 2
+
+
+# --- A4: backfill cap --------------------------------------------------
+#
+# "if the gap is large, at least it should pull 2 days data" -- a machine
+# off for three weeks (or longer) must not ask a source for three weeks of
+# history, and a brand-new source must not drag in its entire archive.
+
+NOW2 = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def test_effective_since_pure_function_first_run_always_capped():
+    since, capped = _effective_since(None, NOW2, 2)
+    assert since == NOW2 - timedelta(days=2)
+    assert capped is True
+
+
+def test_effective_since_pure_function_recent_last_run_is_not_capped():
+    last_run = NOW2 - timedelta(hours=1)
+    since, capped = _effective_since(last_run, NOW2, 2)
+    assert since == last_run
+    assert capped is False
+
+
+def test_effective_since_pure_function_30_day_gap_caps_to_2_days():
+    last_run = NOW2 - timedelta(days=30)
+    since, capped = _effective_since(last_run, NOW2, 2)
+    assert since == NOW2 - timedelta(days=2)
+    assert capped is True
+
+
+def _rss_fixture_with_two_ages(tmp_path, *, near_days_ago: float, far_days_ago: float):
+    near = NOW2 - timedelta(days=near_days_ago)
+    far = NOW2 - timedelta(days=far_days_ago)
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <item><title>Within cap</title><link>https://example.com/within</link>
+        <pubDate>{near.strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate></item>
+  <item><title>Outside cap but after last_run_at</title><link>https://example.com/outside</link>
+        <pubDate>{far.strftime('%a, %d %b %Y %H:%M:%S GMT')}</pubDate></item>
+</channel></rss>
+"""
+    p = tmp_path / "backfill.xml"
+    p.write_text(xml, encoding="utf-8")
+    return p
+
+
+def test_30_day_gap_produces_a_2_day_effective_window_and_is_logged(tmp_path, session, caplog):
+    # Item ages straddle the default 2-day cap but both sit inside the
+    # 30-day gap since last_run_at -- proving the cap, not `since` alone,
+    # is what excludes the older one.
+    p = _rss_fixture_with_two_ages(tmp_path, near_days_ago=1, far_days_ago=10)
+    session.add(Source(id="rss:cap", plugin="rss", config={"path": str(p)},
+                       cadence_minutes=30, enabled=True,
+                       last_run_at=NOW2 - timedelta(days=30)))
+    session.commit()
+
+    with caplog.at_level(logging.WARNING, logger="feed.stages.collect"):
+        res = collect(session, now=NOW2)
+
+    assert res.new_items == 1
+    assert [i.title for i in session.query(Item).all()] == ["Within cap"]
+
+    assert any("max_backfill_days" in r.message for r in caplog.records)
+    src = session.get(Source, "rss:cap")
+    assert src.coverage_warning is not None
+    assert "max_backfill_days" in src.coverage_warning
+
+
+def test_no_backfill_cap_warning_when_gap_is_within_the_cap(tmp_path, session):
+    # last_run_at is only an hour old -- well within the default 2-day cap
+    # -- so the cap must not narrow `since` and must not warn. Item ages
+    # chosen so A3's RSS-truncation heuristic doesn't fire either (one
+    # entry predates `since`, so the mixed case stays silent there too).
+    p = _rss_fixture_with_two_ages(tmp_path, near_days_ago=0.01, far_days_ago=0.2)
+    last_run = NOW2 - timedelta(hours=1)
+    session.add(Source(id="rss:nocap", plugin="rss", config={"path": str(p)},
+                       cadence_minutes=30, enabled=True, last_run_at=last_run))
+    session.commit()
+
+    res = collect(session, now=NOW2)
+
+    src = session.get(Source, "rss:nocap")
+    assert src.coverage_warning is None
+
+
+def test_max_backfill_days_is_configurable_globally(tmp_path, session):
+    # Global cap widened to 15 days: the far item (10 days old) now falls
+    # inside the window and must be collected, unlike the default-cap test
+    # above where it was excluded.
+    p = _rss_fixture_with_two_ages(tmp_path, near_days_ago=1, far_days_ago=10)
+    session.add(Source(id="rss:wide", plugin="rss", config={"path": str(p)},
+                       cadence_minutes=30, enabled=True,
+                       last_run_at=NOW2 - timedelta(days=30)))
+    session.commit()
+
+    res = collect(session, now=NOW2, cfg=CollectConfig(max_backfill_days=15))
+
+    # The 30-day gap still exceeds even the widened 15-day cap, so this run
+    # is still capped (and still warns) -- but capped to a wider window,
+    # which is what lets the far item through where the default-cap test
+    # above excluded it.
+    assert res.new_items == 2
+    src = session.get(Source, "rss:wide")
+    assert src.coverage_warning is not None
+    assert "max_backfill_days=15" in src.coverage_warning
+
+
+def test_per_source_max_backfill_days_overrides_the_global_default(tmp_path, session):
+    # Global default stays at 2 days (cfg omitted below), but this source
+    # carries its own wider override -- proving the per-source column, not
+    # just the global config value, is honoured.
+    p = _rss_fixture_with_two_ages(tmp_path, near_days_ago=1, far_days_ago=10)
+    session.add(Source(id="rss:override", plugin="rss", config={"path": str(p)},
+                       cadence_minutes=30, enabled=True,
+                       last_run_at=NOW2 - timedelta(days=30),
+                       max_backfill_days=15))
+    session.commit()
+
+    res = collect(session, now=NOW2)  # default CollectConfig() -> global cap is 2 days
+
+    # Same 30-day-gap-still-exceeds-the-cap reasoning as the global-config
+    # test above -- the per-source 15-day override still gets capped, but
+    # to ITS OWN 15-day window (not the global 2-day default), which is
+    # what lets the far item through.
+    assert res.new_items == 2
+    src = session.get(Source, "rss:override")
+    assert src.coverage_warning is not None
+    assert "max_backfill_days=15" in src.coverage_warning
+
+
+def test_first_run_backfill_bound_is_logged_and_recorded(tmp_path, session, caplog):
+    p = _rss_fixture_with_two_ages(tmp_path, near_days_ago=1, far_days_ago=10)
+    session.add(Source(id="rss:first", plugin="rss", config={"path": str(p)},
+                       cadence_minutes=30, enabled=True, last_run_at=None))
+    session.commit()
+
+    with caplog.at_level(logging.WARNING, logger="feed.stages.collect"):
+        res = collect(session, now=NOW2)
+
+    assert res.new_items == 1  # only the within-cap item; a brand-new source
+                                # does not drag in its whole history
+    assert any("first run" in r.message for r in caplog.records)
+    src = session.get(Source, "rss:first")
+    assert src.coverage_warning is not None
+    assert "first run" in src.coverage_warning

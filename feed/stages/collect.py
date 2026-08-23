@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 import feed.sources  # noqa: F401  (registers plugins)
+from feed.config import CollectConfig
 from feed.models import Item, Source, Stage
 from feed.sources.base import url_hash
 from feed.sources.registry import build_source
@@ -19,8 +20,36 @@ class CollectResult:
     source_errors: dict[str, str] = field(default_factory=dict)
 
 
-def collect(session: Session, *, now: datetime | None = None) -> CollectResult:
+def _effective_since(
+    last_run_at: datetime | None, now: datetime, cap_days: int
+) -> tuple[datetime, bool]:
+    """Spec A4: bound how far back a source's fetch reaches.
+
+        effective_since = max(last_run_at, now - cap_days)   # last_run_at exists
+        effective_since = now - cap_days                     # first run
+
+    Without this, a machine off for three weeks asks a source for three
+    weeks of history in one shot, and a brand-new source drags in its
+    entire archive (OpenAI's RSS feed returned 1,143 items back to 2015 the
+    first time it was added). Returns (effective_since, capped) where
+    `capped` is True exactly when the cap actually narrowed the window --
+    always True on a first run (there is no `last_run_at` to bound it
+    otherwise), and True on a later run only when the gap since last_run_at
+    genuinely exceeds cap_days.
+    """
+    cap_since = now - timedelta(days=cap_days)
+    if last_run_at is None:
+        return cap_since, True
+    if cap_since > last_run_at:
+        return cap_since, True
+    return last_run_at, False
+
+
+def collect(
+    session: Session, *, now: datetime | None = None, cfg: CollectConfig | None = None
+) -> CollectResult:
     now = now or datetime.now(timezone.utc)
+    cfg = cfg or CollectConfig()
     result = CollectResult()
 
     for src in session.scalars(select(Source).where(Source.enabled.is_(True))):
@@ -28,6 +57,10 @@ def collect(session: Session, *, now: datetime | None = None) -> CollectResult:
             due = src.last_run_at + timedelta(minutes=src.cadence_minutes)
             if now < due:
                 continue
+
+        cap_days = src.max_backfill_days if src.max_backfill_days is not None else cfg.max_backfill_days
+        effective_since, capped = _effective_since(src.last_run_at, now, cap_days)
+
         # I7 fix: the item-insert loop and both commits below used to sit
         # OUTSIDE this try -- only fetch() was covered. A DB error there
         # (a constraint violation, a full disk, any commit() failure)
@@ -39,7 +72,41 @@ def collect(session: Session, *, now: datetime | None = None) -> CollectResult:
         # was, and the loop moves on to the next source.
         try:
             plugin = build_source(src.plugin, src.id, dict(src.config or {}))
-            raw_items = list(plugin.fetch(since=src.last_run_at))
+            raw_items = list(plugin.fetch(since=effective_since))
+
+            # Spec A4: log + persist visibly when the cap actually narrowed
+            # the fetch window, so the owner can tell "I have everything
+            # since my last run" from "I capped at N days and older items
+            # were skipped" (sources.json / `feed sources list`), rather
+            # than the loss being silent (spec success criterion 1).
+            warnings: list[str] = []
+            if capped:
+                if src.last_run_at is None:
+                    msg = (
+                        f"source={src.id}: first run, backfill bounded to "
+                        f"{cap_days}d (since={effective_since.isoformat()}); "
+                        f"older history, if any, was not fetched"
+                    )
+                else:
+                    msg = (
+                        f"source={src.id}: gap since last run "
+                        f"({src.last_run_at.isoformat()}) exceeds "
+                        f"max_backfill_days={cap_days}; capped fetch to "
+                        f"since={effective_since.isoformat()} -- items older "
+                        f"than that were skipped"
+                    )
+                log.warning(msg)
+                warnings.append(msg)
+
+            # Spec A3: a source plugin may optionally report its own
+            # coverage-loss suspicion after fetch() is fully consumed (e.g.
+            # RSS: every dated entry in the fetched feed postdates `since`,
+            # suggesting the feed's window rolled past older items between
+            # runs). Not every plugin sets this -- absent is the common
+            # case and is not itself a warning.
+            plugin_warning = getattr(plugin, "coverage_warning", None)
+            if plugin_warning:
+                warnings.append(plugin_warning)
 
             # Counted locally and only merged into `result` after a
             # successful commit -- if this source's insert loop or commit
@@ -69,6 +136,7 @@ def collect(session: Session, *, now: datetime | None = None) -> CollectResult:
             src.last_run_at = now
             src.last_error = None
             src.consecutive_failures = 0
+            src.coverage_warning = "; ".join(warnings) if warnings else None
             session.commit()
             result.new_items += new_items
             result.skipped_duplicates += skipped_duplicates

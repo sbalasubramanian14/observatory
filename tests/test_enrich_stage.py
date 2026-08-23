@@ -232,9 +232,17 @@ def test_tier2_retries_a_previously_degraded_story(session):
 
 def test_tier2_respects_daily_budget_across_prior_runs_today(session):
     now = datetime.now(timezone.utc)
+    # Discovered flaky during phaseA live verification: `now - 1 hour` can
+    # land on the PREVIOUS UTC calendar day whenever the test runs within
+    # the first hour after UTC midnight, so the "3 already spent today"
+    # setup silently seeds yesterday instead -- clamp to the start of
+    # today's UTC day so "prior runs today" is true regardless of wall
+    # clock time.
+    start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    earlier_today = max(start_of_today, now - timedelta(hours=1))
     for i in range(3):
         _seed_story(session, score=0.9, status=StoryStatus.ANALYZED, titles=(f"old{i}",),
-                   analyzed_at=now - timedelta(hours=1))
+                   analyzed_at=earlier_today)
     fresh = _seed_story(session, score=0.9, status=StoryStatus.ENRICHED, titles=("fresh",))
     deep = _FakeProvider("claude-code", "claude-code", Tier.DEEP, responses=["analysis"])
     router = Router(bulk=_FakeProvider("gemini", "gemini-flash-latest", Tier.BULK), deep=deep)

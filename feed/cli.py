@@ -125,7 +125,8 @@ def cmd_sources_add(args, cfg: Config) -> int:
     _, factory = _session(cfg)
     with factory() as s:
         s.merge(Source(id=args.id, plugin=args.plugin, config=conf,
-                       cadence_minutes=args.cadence, authority=args.authority))
+                       cadence_minutes=args.cadence, authority=args.authority,
+                       max_backfill_days=args.max_backfill_days))
         s.commit()
     print(f"added source {args.id}")
     return 0
@@ -136,6 +137,8 @@ def cmd_sources_list(args, cfg: Config) -> int:
     with factory() as s:
         for src in s.scalars(select(Source).order_by(Source.id)):
             state = "ok" if src.consecutive_failures == 0 else f"FAILING x{src.consecutive_failures}"
+            if src.coverage_warning:
+                state += "  COVERAGE-WARN"
             print(f"{src.id:<28} {src.plugin:<18} every {src.cadence_minutes:>4}m  {state}")
     return 0
 
@@ -160,7 +163,7 @@ def cmd_run(args, cfg: Config) -> int:
     embedder = build_embedder(cfg.embedding)
     adjudicator = _build_adjudicator(cfg)
     with factory() as s:
-        c = collect(s)
+        c = collect(s, cfg=cfg.collect)
         print(f"collect:   new={c.new_items} dupes={c.skipped_duplicates} "
               f"source_errors={len(c.source_errors)}")
         for name, stage_fn in [
@@ -337,6 +340,9 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--config-json", default="{}")
     add.add_argument("--cadence", type=int, default=30)
     add.add_argument("--authority", type=float, default=0.5)
+    add.add_argument("--max-backfill-days", type=int, default=None,
+                     help="per-source override of [collect].max_backfill_days "
+                          "(default: use the global value)")
     add.set_defaults(func=cmd_sources_add)
     srcs.add_parser("list").set_defaults(func=cmd_sources_list)
     return p

@@ -2,6 +2,13 @@
 [database]
 url = "sqlite:///feed.db"
 
+# Spec success criterion 1 / phaseA-report A4: bound how far back a source's
+# first fetch (or a fetch after a long gap) reaches. Per-source override
+# lives on the source row (Source.max_backfill_days), not here -- see
+# `feed sources add --max-backfill-days`.
+[collect]
+max_backfill_days = 2
+
 [embedding]
 backend = "auto"
 # No explicit `model =` here, deliberately (C2 fix): resolve() only swaps

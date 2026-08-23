@@ -84,6 +84,43 @@ def _block_real_openai_compatible_network(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _block_real_hackernews_network(monkeypatch):
+    """Same guard, for feed.sources.hackernews.HackerNewsSource (Algolia HN
+    Search API, A2). fetch() calls the module-level _get() seam rather than
+    httpx directly so this can be monkeypatched cleanly. A slow-marked test
+    that genuinely wants the live endpoint should monkeypatch this back to
+    a real implementation itself (see tests/test_sources_more.py), not rely
+    on this guard being absent.
+    """
+    def _boom(*args, **kwargs):
+        raise AssertionError(
+            "real network call (feed.sources.hackernews._get) attempted "
+            "during a test; monkeypatch feed.sources.hackernews._get or "
+            "use path= instead"
+        )
+
+    monkeypatch.setattr("feed.sources.hackernews._get", _boom)
+
+
+@pytest.fixture(autouse=True)
+def _block_real_arxiv_network(monkeypatch):
+    """Same guard, for feed.sources.arxiv.ArxivSource (A1 pagination).
+    fetch() calls the module-level _get() seam rather than httpx directly
+    so this can be monkeypatched cleanly. A slow-marked test that genuinely
+    wants the live API should monkeypatch this back to a real
+    implementation itself, not rely on this guard being absent.
+    """
+    def _boom(*args, **kwargs):
+        raise AssertionError(
+            "real network call (feed.sources.arxiv._get) attempted during "
+            "a test; monkeypatch feed.sources.arxiv._get or use path=/"
+            "paths= instead"
+        )
+
+    monkeypatch.setattr("feed.sources.arxiv._get", _boom)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_retry_sleep(monkeypatch):
     """feed.providers._retry.call_with_retry() backs off with a real
     time.sleep() between attempts in production. Left un-mocked, a test

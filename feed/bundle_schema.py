@@ -99,6 +99,11 @@ class SourceHealth(_Strict):
     last_run_at: str | None = None
     consecutive_failures: int
     last_error: str | None = None
+    # Spec A3/A4: set when the most recent collect() run has a specific
+    # reason to suspect coverage loss (RSS window truncation, or the
+    # backfill cap narrowing the fetch window) -- None means the last run
+    # collected everything since the previous one, per source.
+    coverage_warning: str | None = None
 
 
 class SourcesReport(_Strict):

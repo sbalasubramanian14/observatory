@@ -42,6 +42,23 @@ _STORY_NEW_COLUMNS: dict[str, str] = {
     "summary_provider": "VARCHAR(128)",
 }
 
+# Same additive-migration reasoning, for columns the phaseA collect-stage
+# fix (backfill cap + coverage-loss visibility) added to `source`: an
+# existing feed.db's `source` table predates them.
+_SOURCE_NEW_COLUMNS: dict[str, str] = {
+    "max_backfill_days": "INTEGER",
+    "coverage_warning": "TEXT",
+}
+
+
+def _add_missing_columns(conn, table: str, columns: dict[str, str]) -> None:
+    existing = {
+        row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")
+    }
+    for column, ddl_type in columns.items():
+        if column not in existing:
+            conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
+
 
 def _migrate_sqlite(engine: Engine) -> None:
     if engine.dialect.name != "sqlite":
@@ -52,14 +69,10 @@ def _migrate_sqlite(engine: Engine) -> None:
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
-        if "story" not in tables:
-            return
-        existing = {
-            row[1] for row in conn.exec_driver_sql("PRAGMA table_info(story)")
-        }
-        for column, ddl_type in _STORY_NEW_COLUMNS.items():
-            if column not in existing:
-                conn.exec_driver_sql(f"ALTER TABLE story ADD COLUMN {column} {ddl_type}")
+        if "story" in tables:
+            _add_missing_columns(conn, "story", _STORY_NEW_COLUMNS)
+        if "source" in tables:
+            _add_missing_columns(conn, "source", _SOURCE_NEW_COLUMNS)
 
 
 def create_all(engine: Engine) -> None:

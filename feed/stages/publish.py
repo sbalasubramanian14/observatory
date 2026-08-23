@@ -129,6 +129,7 @@ def _sources_report_dict(session: Session, *, now: datetime) -> dict:
             "last_run_at": _iso(src.last_run_at),
             "consecutive_failures": src.consecutive_failures,
             "last_error": error,
+            "coverage_warning": src.coverage_warning,
         })
     return {"generated_at": _iso(now), "sources": sources}
 

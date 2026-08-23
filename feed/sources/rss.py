@@ -27,6 +27,12 @@ class RssSource:
         self.url = url
         self.path = path
         self.timeout = timeout
+        # Spec A3: set by fetch() when this run's coverage looks suspect --
+        # feed.stages.collect.collect() reads this optional attribute after
+        # fully consuming fetch()'s generator and persists it onto the
+        # Source row / sources.json. None (the default here, and after
+        # every clean fetch) means nothing was flagged.
+        self.coverage_warning: str | None = None
 
     def _raw(self) -> bytes:
         if self.path:
@@ -38,7 +44,9 @@ class RssSource:
         return resp.content
 
     def fetch(self, since: datetime | None) -> Iterable[RawItem]:
+        self.coverage_warning = None
         parsed = feedparser.parse(self._raw())
+        dated: list[datetime] = []
         for i, entry in enumerate(parsed.entries):
             link = entry.get("link")
             if not link:
@@ -50,6 +58,7 @@ class RssSource:
             if tm:
                 # feedparser normalises all dates to UTC struct_time.
                 published = datetime(*tm[:6], tzinfo=timezone.utc)
+                dated.append(published)
             if since is not None and published is not None and published <= since:
                 continue
             yield RawItem(
@@ -58,3 +67,23 @@ class RssSource:
                 summary=(entry.get("summary") or None),
                 published_at=published,
             )
+
+        # Spec A3: a feed document only ever carries the publisher's last N
+        # entries -- no amount of pagination fixes that (there is none to
+        # do). What CAN be detected: if every dated entry this fetch saw
+        # postdates `since`, none of them overlap with the last run at all,
+        # which means the feed's window most likely rolled entirely past
+        # `since` between runs -- whatever was published in between is
+        # gone. A mix (some entries <= since) means the window still
+        # reaches back far enough; that's the normal, non-lossy case and
+        # must stay silent. Skipped on a first run (since is None, there is
+        # no gap to compare against) and on an empty/all-undated feed
+        # (nothing to judge truncation from).
+        if since is not None and dated and all(p > since for p in dated):
+            self.coverage_warning = (
+                f"rss source={self.id!r}: all {len(dated)} dated entries in "
+                f"this fetch postdate since={since.isoformat()} -- the "
+                f"feed's window may have rolled past older items between "
+                f"runs; coverage may be incomplete"
+            )
+            log.warning(self.coverage_warning)

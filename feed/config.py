@@ -17,6 +17,23 @@ class EmbeddingConfig(BaseModel):
     batch_size: int = Field(default=256, gt=0, le=1024)
 
 
+class CollectConfig(BaseModel):
+    """Spec A4 (phaseA-report): a global cap on how far back a source's
+    first fetch (or a fetch after a long gap) is allowed to reach.
+
+    Without this, a machine off for three weeks asks every source for three
+    weeks of history in one go (arXiv/HN volume makes that expensive and,
+    for HN's search API, still incomplete), and a brand-new source drags in
+    its entire archive (OpenAI's RSS feed returned 1,143 items back to 2015
+    the first time it was added). The owner's instruction: "if the gap is
+    large, at least it should pull 2 days data" -- so the default is 2, not
+    0 or unbounded. See feed.stages.collect._effective_since, which applies
+    this uniformly to every source, and Source.max_backfill_days, which
+    lets one source override it individually.
+    """
+    max_backfill_days: int = Field(default=2, gt=0)
+
+
 class ClusteringConfig(BaseModel):
     window_hours: int = Field(default=48, gt=0)
     cosine_weight: float = Field(default=0.6, ge=0.0, le=1.0)
@@ -160,6 +177,7 @@ class PublishConfig(BaseModel):
 class Config(BaseModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    collect: CollectConfig = Field(default_factory=CollectConfig)
     clustering: ClusteringConfig = Field(default_factory=ClusteringConfig)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)

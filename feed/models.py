@@ -79,6 +79,20 @@ class Source(Base):
     last_run_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
     last_error: Mapped[str | None] = mapped_column(Text)
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    # Spec A4: per-source override of [collect].max_backfill_days. None
+    # means "use the global default" -- see feed.stages.collect._effective_since.
+    max_backfill_days: Mapped[int | None] = mapped_column(Integer)
+    # Spec A3/A4: the most recent run's coverage-loss signal, refreshed
+    # every run (cleared to None on a clean run, same lifecycle as
+    # last_error/consecutive_failures above) -- NOT sticky, since it
+    # describes "is there a reason to distrust the LAST run's coverage",
+    # not a running history. Set either when the backfill cap actually
+    # narrowed the fetch window, or when a source plugin's own fetch()
+    # reports a coverage_warning attribute (e.g. RSS: every dated entry in
+    # the fetched feed postdates `since`, suggesting the feed rolled past
+    # older items between runs). Published in sources.json (spec 4.2:
+    # "silent coverage loss ... must be visible in the client").
+    coverage_warning: Mapped[str | None] = mapped_column(Text)
 
 class Item(Base):
     __tablename__ = "item"

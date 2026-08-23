@@ -156,11 +156,22 @@ def test_run_drains_more_than_one_batch_per_stage(tmp_path, monkeypatch, capsys)
     monkeypatch.setattr("feed.embedding.resolve.cuda_available", lambda: False)
 
     n = 130  # > normalize's default limit (100) and > embed's batch_size (50)
+    # A4 (backfill cap): `feed run` always collects against the real
+    # current time (no --now override), and a brand-new source's first
+    # fetch is capped to [collect].max_backfill_days (default 2). A fixed
+    # historical pubDate would silently fall outside that window and this
+    # test would collect 0 items regardless of how the pipeline runs it --
+    # so pin the fixture's dates to "recently before the real now" instead.
+    import email.utils
+    from datetime import datetime, timedelta, timezone
+    recent = email.utils.format_datetime(
+        datetime.now(timezone.utc) - timedelta(hours=1)
+    )
     items_xml = "".join(
         f"<item><title>Story {i}</title>"
         f"<link>https://example.com/story-{i}</link>"
         f"<description>Unique summary text describing story number {i} in detail.</description>"
-        f"<pubDate>Tue, 18 Aug 2026 09:00:00 GMT</pubDate></item>"
+        f"<pubDate>{recent}</pubDate></item>"
         for i in range(n)
     )
     rss_path = tmp_path / "big.xml"
