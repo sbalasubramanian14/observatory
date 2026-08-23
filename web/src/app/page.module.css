@@ -4,8 +4,26 @@
   padding: var(--space-6) var(--space-5) var(--space-8);
 }
 
+/* Cards mode (mobile deck) needs to reclaim vertical space rather than
+ * scroll the outer page at all -- see StoryDeck's own height measurement,
+ * which fills whatever remains below this compacted header exactly. */
+@media (max-width: 767px) {
+  .containerCards {
+    padding-top: var(--space-3);
+    padding-bottom: 0;
+  }
+}
+
 .hero {
   margin-bottom: var(--space-6);
+}
+
+.heroCompact {
+  margin-bottom: var(--space-3);
+}
+
+.heroCompact .title {
+  font-size: var(--text-xl);
 }
 
 .heroTop {
@@ -77,9 +95,31 @@
 }
 
 .list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr;
   gap: var(--space-4);
+}
+
+/* Desktop: a genuinely denser multi-column grid, not a stretched phone
+ * list — the redesign brief's explicit "do not just stretch the phone
+ * UI" for desktop. */
+@media (min-width: 900px) {
+  .list {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1320px) {
+  .list {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* The card deck (mobile "cards" view mode) breaks out of .container's
+ * padding to go full-bleed edge to edge — an immersive one-story-at-a-time
+ * reader, not a card floating inside the list's margins. */
+.deckWrap {
+  margin: 0 calc(-1 * var(--space-5));
 }
 
 .loadMoreRow {

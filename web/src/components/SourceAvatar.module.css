@@ -1,0 +1,30 @@
+.avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--avatar-size, 32px);
+  height: var(--avatar-size, 32px);
+  border-radius: 50%;
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: calc(var(--avatar-size, 32px) * 0.36);
+  letter-spacing: 0.02em;
+}
+
+.v1 {
+  background: var(--color-avatar-1-soft);
+  color: var(--color-avatar-1);
+}
+.v2 {
+  background: var(--color-avatar-2-soft);
+  color: var(--color-avatar-2);
+}
+.v3 {
+  background: var(--color-avatar-3-soft);
+  color: var(--color-avatar-3);
+}
+.v4 {
+  background: var(--color-avatar-4-soft);
+  color: var(--color-avatar-4);
+}

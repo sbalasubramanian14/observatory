@@ -1,0 +1,40 @@
+/* Mobile-only — desktop always uses the multi-column grid (list mode);
+ * the one-story-at-a-time deck is a phone-reading affordance. */
+.wrap {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .wrap {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-sunken);
+    border: 1px solid var(--color-border);
+  }
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.optionActive {
+  background: var(--color-surface-elevated);
+  color: var(--color-accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.icon {
+  width: 16px;
+  height: 16px;
+}

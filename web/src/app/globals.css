@@ -89,10 +89,34 @@
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 18px;
+  --radius-xl: 28px;
   --radius-pill: 999px;
 
   --content-width: 780px;
   --content-width-wide: 980px;
+
+  /* Ambient field (PWA §Part 2 signature element): three stops sampled by
+   * both the WebGL shader (as uniforms, read via getComputedStyle — never
+   * hardcoded in TS, see AmbientField.tsx) and the CSS gradient fallback
+   * used when WebGL is unavailable or prefers-reduced-motion is set. Light
+   * theme reads as a dawn sky over parchment; dark theme reads as deep
+   * space. Kept low-contrast against --color-surface so it stays ambient,
+   * not decorative noise, behind opaque cards.
+   */
+  --color-ambient-1: #eef1ff;
+  --color-ambient-2: #fdf1e6;
+  --color-ambient-3: #f7f5ef;
+
+  /* Deterministic per-source "avatar" chip backgrounds/text (StoryCard) --
+   * cycled by a hash of the source id, never a hardcoded per-source colour. */
+  --color-avatar-1: var(--color-accent);
+  --color-avatar-1-soft: var(--color-accent-soft);
+  --color-avatar-2: var(--color-importance-high);
+  --color-avatar-2-soft: var(--color-importance-high-soft);
+  --color-avatar-3: var(--color-success);
+  --color-avatar-3-soft: var(--color-success-soft);
+  --color-avatar-4: var(--color-warning);
+  --color-avatar-4-soft: var(--color-warning-soft);
 }
 
 /* System dark mode, only when the reader hasn't made an explicit choice. */
@@ -133,6 +157,10 @@
     --color-warning-soft: #3c3018;
     --color-danger: #f38b83;
     --color-danger-soft: #3d1e1c;
+
+    --color-ambient-1: #171a33;
+    --color-ambient-2: #1c1430;
+    --color-ambient-3: #0e0e13;
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.45);
@@ -177,6 +205,10 @@
   --color-warning-soft: #3c3018;
   --color-danger: #f38b83;
   --color-danger-soft: #3d1e1c;
+
+  --color-ambient-1: #171a33;
+  --color-ambient-2: #1c1430;
+  --color-ambient-3: #0e0e13;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.45);
@@ -245,6 +277,30 @@ button:focus-visible,
 
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/* AmbientField (fixed, z-index 0) sits behind everything else; giving the
+ * real app shell its own stacking context at z-index 1 is what makes that
+ * hold regardless of DOM order. */
+.appShell {
+  position: relative;
+  z-index: 1;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.appShell > main {
+  flex: 1;
+}
+
+/* Clearance for the floating BottomNav (mobile only — see BottomNav.module.css).
+ * A full-bleed view (the mobile story deck) opts out by positioning itself
+ * `fixed; inset: 0`, which ignores this padding entirely. */
+@media (max-width: 767px) {
+  .appShell > main {
+    padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 .visually-hidden {

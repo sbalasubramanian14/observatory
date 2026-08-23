@@ -47,6 +47,15 @@
   gap: var(--space-2);
 }
 
+/* Mobile wayfinding moves to the floating BottomNav (Feed/Sources/Saved +
+ * a "More" sheet for theme/personalization) — the top bar stays a clean
+ * brand strip instead of duplicating those controls at a cramped width. */
+@media (max-width: 767px) {
+  .nav {
+    display: none;
+  }
+}
+
 .navLink {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-pill);

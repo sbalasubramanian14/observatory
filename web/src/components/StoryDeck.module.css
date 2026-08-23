@@ -1,0 +1,209 @@
+/* Mobile-only, full-viewport-per-story deck (view mode "cards"). CSS
+ * scroll-snap does the paging — native momentum + snap, no JS physics, no
+ * scroll-jank (the redesign brief's explicit requirement). Height is set
+ * inline from a measured header height (see StoryDeck.tsx) so this fills
+ * exactly the space below the sticky header with no leftover outer-page
+ * scroll, which is what keeps the header pinned for free. */
+.deck {
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-snap-type: y mandatory;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.slide {
+  height: 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4) var(--space-4) calc(var(--space-4) + 96px);
+}
+
+.card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-radius: var(--radius-xl);
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  touch-action: pan-y;
+  will-change: transform;
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5) var(--space-3);
+  flex: none;
+}
+
+.identityText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.sourceName {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.timestamp {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.imageWrap {
+  flex: none;
+  margin: 0 var(--space-5);
+  /* Cap the image so headline/summary always have guaranteed room below
+   * it on short viewports -- the wrap's own aspect-ratio box can render
+   * taller than this, cropped by overflow:hidden, which reads as an
+   * intentional close crop rather than a layout bug. */
+  max-height: 20vh;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-5) var(--space-4);
+  display: flex;
+  flex-direction: column;
+}
+
+.metaTop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.headline {
+  display: block;
+  font-family: var(--font-serif);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  line-height: var(--leading-tight);
+  color: var(--color-text-primary);
+  text-decoration: none;
+  margin-bottom: var(--space-3);
+}
+
+.textOnlyPad {
+  flex: 1;
+}
+
+.summary {
+  font-size: var(--text-md);
+  color: var(--color-text-secondary);
+  line-height: var(--leading-normal);
+  margin: 0;
+}
+
+.summaryEmpty {
+  font-style: italic;
+  color: var(--color-text-tertiary);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--color-border);
+  flex: none;
+}
+
+.metaBottom {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.metaItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.actionRow {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.iconButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.iconButtonActive {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.swipeHint {
+  flex: none;
+  text-align: center;
+  padding-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* Directional affordance revealed behind the card while dragging. */
+.affordance {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.affordanceSave {
+  right: var(--space-6);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.affordanceDismiss {
+  left: var(--space-6);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}

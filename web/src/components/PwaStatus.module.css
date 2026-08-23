@@ -1,0 +1,68 @@
+.offlineBanner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-align: center;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.offlineDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.updateToast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--space-5) + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-5);
+  border-radius: var(--radius-pill);
+  background: var(--color-text-primary);
+  color: var(--color-surface);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-sm);
+  animation: rise 0.35s ease;
+}
+
+@media (min-width: 768px) {
+  .updateToast {
+    bottom: var(--space-6);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.updateButton {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  border: none;
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}

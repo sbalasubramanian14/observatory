@@ -1,0 +1,111 @@
+/* Floating bottom nav (Reference A) — mobile only; desktop keeps the top
+ * Header's nav links (see page layout note in the redesign report). */
+.nav {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    gap: var(--space-1);
+    position: fixed;
+    left: var(--space-4);
+    right: var(--space-4);
+    bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+    z-index: 50;
+    padding: var(--space-2);
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--color-surface-elevated) 92%, transparent);
+    backdrop-filter: blur(16px);
+    box-shadow: var(--shadow-md);
+    border: 1px solid var(--color-border);
+  }
+}
+
+.item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 56px;
+  height: 48px;
+  border-radius: var(--radius-pill);
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.itemActive {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.icon {
+  width: 20px;
+  height: 20px;
+}
+
+.itemLabel {
+  font-size: 0.625rem;
+  font-weight: 600;
+}
+
+.badge {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-pill);
+  background: var(--color-importance-high);
+  color: var(--color-accent-contrast);
+  font-size: 0.5625rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+}
+
+.sheetScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: var(--color-overlay);
+}
+
+.sheet {
+  position: fixed;
+  left: var(--space-4);
+  right: var(--space-4);
+  bottom: calc(var(--space-4) + 68px + env(safe-area-inset-bottom, 0px));
+  z-index: 56;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-md);
+}
+
+.sheetRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.sheetLabel {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}

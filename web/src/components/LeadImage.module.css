@@ -20,6 +20,15 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* Full-width image at the top of a StoryCard (Reference A: "large rounded
+ * image" under the headline row). */
+.card {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius-lg);
+  border: none;
+}
+
 @media (max-width: 560px) {
   .thumb {
     width: 76px;

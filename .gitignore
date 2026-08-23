@@ -23,8 +23,10 @@ VERCEL-SETUP.md
 
 # Playwright MCP tool artifacts (snapshots/console logs from manual testing)
 .playwright-mcp/
-public/
-.playwright-mcp/
+# Root-level only (the pipeline's published bundle output dir) — anchored
+# with a leading slash so it does NOT also match web/public/, which holds
+# real committed static assets (manifest.webmanifest, sw.js, icons/).
+/public/
 LLM-PROVIDERS.md
 PIPELINE-CLI.md
 IMPLEMENTATION-TRACKER.md

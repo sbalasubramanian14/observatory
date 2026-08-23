@@ -5,6 +5,7 @@ import type {
   SourcesFile,
   StoryDetail,
 } from "./types";
+import { recordSync, recordServedFrom } from "./pwa";
 
 // Fetches the published bundle at runtime (never bundled at build time —
 // spec §4.5: "Deployed once; it fetches the manifest and bundle at
@@ -57,12 +58,13 @@ function resolveUrl(path: string): string {
  * than writing under a new content-hashed name. A cache-busting query
  * param plus `cache: "no-store"` guarantees this always reaches the origin,
  * never a stale browser/CDN copy. */
-async function fetchFresh<T>(path: string): Promise<T> {
+async function fetchFresh<T>(path: string, onResponse?: (res: Response) => void): Promise<T> {
   const url = `${resolveUrl(path)}?t=${Date.now()}`;
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
   }
+  onResponse?.(res);
   return (await res.json()) as T;
 }
 
@@ -81,7 +83,20 @@ async function fetchImmutable<T>(path: string): Promise<T> {
 }
 
 export async function getManifest(): Promise<Manifest> {
-  return fetchFresh<Manifest>("manifest.json");
+  // recordSync() only fires for a response that genuinely reached the
+  // network just now. sw.js's network-first strategy for manifest.json
+  // falls back to its cache when offline and tags that fallback with
+  // X-Observatory-From-Cache — otherwise every offline reload would
+  // silently rewrite the offline banner's "cached data from <time>" to
+  // "now", exactly the dishonest UX the spec rules out. See lib/pwa.ts's
+  // useLastSync, which the banner reads.
+  return fetchFresh<Manifest>("manifest.json", (res) => {
+    const fromCache = !!res.headers.get("X-Observatory-From-Cache");
+    if (!fromCache) recordSync();
+    // See lib/pwa.ts's useServingFromCache — a second, more direct signal
+    // for the offline banner than navigator.onLine alone.
+    recordServedFrom(fromCache);
+  });
 }
 
 export async function getFeedPage(path: string): Promise<FeedPage> {
