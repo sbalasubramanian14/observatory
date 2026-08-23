@@ -1,7 +1,18 @@
 import pytest
+from feed import imaging as imaging_module
 from feed.models import Item, Source, Stage
 from feed.stages import normalize as normalize_module
 from feed.stages.normalize import content_hash, normalize, normalize_item
+
+
+class _FakeResponse:
+    """Minimal stand-in for an httpx.Response, just enough of the surface
+    feed.imaging.fetch_og_image reads (status_code, text, url)."""
+
+    def __init__(self, status_code: int, text: str = "", url: str = ""):
+        self.status_code = status_code
+        self.text = text
+        self.url = url
 
 
 def _seed(session, **kw):
@@ -175,13 +186,26 @@ def test_plain_text_summary_with_no_markup_still_normalizes(session):
 # is None does normalize fall back to scraping the article page's
 # og:image, then twitter:image. Any fetch failure degrades to None rather
 # than failing the item -- a missing lead image is cosmetic.
+#
+# Phase D-images restructured WHERE the second half of that chain runs:
+# normalize_item() itself now only ever handles step 1 (keep/discard the
+# feed-supplied image) and NEVER touches the network -- see
+# feed.stages.normalize._resolve_image's docstring for why (a serial
+# network round-trip per item, inlined into run_stage's per-row loop, does
+# not scale to a ~400 item/day backlog). Step 2 (the og:image page fetch)
+# is now feed.imaging.resolve_images, called once as a concurrent batch
+# pass by normalize() (the STAGE function) after its per-item loop, and
+# again by `feed backfill-images` over the historical corpus. The
+# normalize_item-level tests below assert step 1's synchronous, network-
+# free behaviour; the network-touching fallback itself is proven at the
+# normalize()-stage level further down, and exhaustively at the unit level
+# in tests/test_imaging.py.
 
-def test_feed_supplied_image_is_kept_and_og_image_fetch_is_never_attempted(session, monkeypatch):
-    def _fail_if_called(url):
-        raise AssertionError("og:image fallback must not be attempted when "
-                              "the feed already supplied an image")
+def test_feed_supplied_image_is_kept_and_normalize_item_never_touches_network(session, monkeypatch):
+    def _fail_if_called(*a, **kw):
+        raise AssertionError("normalize_item must never touch the network for images")
 
-    monkeypatch.setattr(normalize_module, "_fetch_og_image", _fail_if_called)
+    monkeypatch.setattr(imaging_module, "_get", _fail_if_called)
     item = _seed(session, url_hash="img1", url="https://example.com/has-image",
                 image_url="https://img.example.com/from-feed.jpg")
     normalize_item(session, item)
@@ -189,37 +213,80 @@ def test_feed_supplied_image_is_kept_and_og_image_fetch_is_never_attempted(sessi
     assert item.image_url == "https://img.example.com/from-feed.jpg"
 
 
-def test_og_image_fallback_is_used_when_feed_supplied_no_image(session, monkeypatch):
-    monkeypatch.setattr(normalize_module, "_fetch_og_image",
-                        lambda url: "https://img.example.com/og.jpg")
+def test_no_feed_image_leaves_image_url_none_after_normalize_item_alone(session, monkeypatch):
+    """normalize_item() (the per-item handler, NOT the normalize() stage
+    function) never attempts the og:image fallback itself -- that is the
+    stage function's job, run once as a batch after the per-item loop. A
+    caller that only calls normalize_item() directly (as this test, and
+    several others in this file, do) must see image_url stay None rather
+    than a network call happening implicitly.
+    """
+    def _fail_if_called(*a, **kw):
+        raise AssertionError("normalize_item must never touch the network for images")
+
+    monkeypatch.setattr(imaging_module, "_get", _fail_if_called)
     item = _seed(session, url_hash="img2", url="https://example.com/no-feed-image")
     assert item.image_url is None
     normalize_item(session, item)
     session.commit()
+    assert item.image_url is None
+
+
+def test_normalize_stage_fills_in_missing_image_via_concurrent_fallback(session, monkeypatch):
+    """The og:image fallback DOES run, end to end, through the real
+    normalize() stage function (not a monkeypatched shortcut) -- only the
+    network seam (feed.imaging._get) is faked, so this exercises the real
+    fetch_og_image parsing + resolve_images batching + the commit back onto
+    item.image_url/image_checked_at.
+    """
+    html = ('<html><head><meta property="og:image" '
+           'content="https://img.example.com/og.jpg"/></head></html>')
+
+    monkeypatch.setattr(imaging_module, "_get",
+                        lambda url, *, timeout: _FakeResponse(200, html, url))
+
+    item = _seed(session, url_hash="img2b", url="https://example.com/no-feed-image-2")
+    res = normalize(session)
+
+    assert res.processed == 1
+    session.refresh(item)
     assert item.image_url == "https://img.example.com/og.jpg"
+    assert item.image_checked_at is not None
 
 
-def test_og_image_fallback_failure_degrades_to_none_not_a_raised_error(session, monkeypatch):
-    def _boom(url):
+def test_normalize_stage_image_fallback_failure_degrades_to_none(session, monkeypatch):
+    def _boom(url, *, timeout):
         raise RuntimeError("network exploded")
 
-    monkeypatch.setattr(normalize_module, "_fetch_og_image", _boom)
+    monkeypatch.setattr(imaging_module, "_get", _boom)
     item = _seed(session, url_hash="img3", url="https://example.com/broken-fetch")
-    normalize_item(session, item)  # must NOT raise
-    session.commit()
+    res = normalize(session)
+
+    assert res.processed == 1  # text normalization still succeeds
+    session.refresh(item)
     assert item.image_url is None
-    assert item.stage != Stage.FAILED
+    assert item.stage is Stage.NORMALIZED
+    # A raised network exception is transient (feed.imaging.ImageFetchResult
+    # .is_transient) -- image_checked_at deliberately stays unset so a
+    # later run retries, rather than caching a network hiccup as "no image
+    # forever". See tests/test_imaging.py for the direct unit-level proof.
+    assert item.image_checked_at is None
 
 
-def test_arxiv_item_never_attempts_og_image_fetch(session, monkeypatch):
-    def _fail_if_called(url):
-        raise AssertionError("arXiv items must never attempt the og:image fetch seam")
+def test_normalize_stage_never_attempts_og_image_fetch_for_arxiv_items(session, monkeypatch):
+    calls = []
 
-    monkeypatch.setattr(normalize_module, "_fetch_og_image", _fail_if_called)
+    def _record(url, *, timeout):
+        calls.append(url)
+        return _FakeResponse(200, "", url)
+
+    monkeypatch.setattr(imaging_module, "_get", _record)
     item = _seed(session, url_hash="img4", url="https://arxiv.org/abs/2607.09511")
-    normalize_item(session, item)
-    session.commit()
+    res = normalize(session)
+    assert res.processed == 1
+    session.refresh(item)
     assert item.image_url is None
+    assert calls == []
 
 
 def test_extract_og_image_prefers_og_image_over_twitter_image():
@@ -271,8 +338,7 @@ def test_extract_og_image_returns_none_when_only_unreliable_host_available():
     assert normalize_module._extract_og_image(html, "https://research.facebook.com/blog/y") is None
 
 
-def test_feed_supplied_image_on_unreliable_host_is_discarded(session, monkeypatch):
-    monkeypatch.setattr(normalize_module, "_fetch_og_image", lambda url: None)
+def test_feed_supplied_image_on_unreliable_host_is_discarded(session):
     item = _seed(session, url_hash="img6", url="https://research.facebook.com/blog/z",
                 image_url="https://research.facebook.com/file/7/z.jpg")
     normalize_item(session, item)
@@ -314,20 +380,25 @@ def test_non_arxiv_empty_summary_uses_fetch_seam_not_real_network(session, monke
 
 
 def test_no_summary_and_no_feed_image_uses_both_fallback_seams(session, monkeypatch):
-    """The two fallbacks (full-text fetch, og:image fetch) are independent
-    seams -- an item needing both must consult both, and the result of each
-    must land in the right field."""
+    """The two fallbacks -- full-text fetch (normalize_item's per-item
+    network seam) and og:image fetch (the normalize()-stage-level
+    concurrent pass) -- are independent and both fire for an item needing
+    both, each landing its result in the right field. Run through the real
+    normalize() stage function so both actually execute in the same call,
+    the way `feed run` would."""
     monkeypatch.setattr(
         normalize_module, "_fetch_remote_text",
         lambda url: "Real extracted article text goes here, well past the minimum length.",
     )
-    monkeypatch.setattr(
-        normalize_module, "_fetch_og_image",
-        lambda url: "https://img.example.com/fallback.jpg",
-    )
+    html = ('<html><head><meta property="og:image" '
+           'content="https://img.example.com/fallback.jpg"/></head></html>')
+    monkeypatch.setattr(imaging_module, "_get",
+                        lambda url, *, timeout: _FakeResponse(200, html, url))
+
     item = _seed(session, url_hash="img5", summary="", title="",
                 url="https://example.com/needs-both")
-    normalize_item(session, item)
-    session.commit()
+    res = normalize(session)
+    assert res.processed == 1
+    session.refresh(item)
     assert "real extracted article text" in item.text.lower()
     assert item.image_url == "https://img.example.com/fallback.jpg"

@@ -125,6 +125,18 @@ class Item(Base):
     # story.status additive migration this needs no backfill -- there is no
     # wrong default to accidentally leave existing rows on.
     image_url: Mapped[str | None] = mapped_column(Text)
+    # Phase D-images: when the og:image/twitter:image fallback (feed.imaging)
+    # last attempted a fetch for this item, whatever the outcome. NULL means
+    # "never attempted" -- the only state feed.imaging.needs_image_fetch()
+    # treats as eligible for (re)try. Set alongside image_url whenever an
+    # attempt reaches a definitive answer (a 2xx response with or without a
+    # usable meta tag, or one of NO_RETRY_STATUSES like 403/202/429); left
+    # NULL on a raised network-level exception (timeout, DNS failure, ...)
+    # so a transient failure is retried next run instead of being cached as
+    # a permanent "no image" forever. This is what makes both the normalize
+    # stage's post-step and `feed backfill-images` resumable and idempotent:
+    # neither re-fetches a page for an item this column already covers.
+    image_checked_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
     published_at: Mapped[datetime | None] = mapped_column(UtcDateTime, index=True)
     fetched_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary)

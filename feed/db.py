@@ -67,6 +67,12 @@ _SOURCE_NEW_COLUMNS: dict[str, str] = {
 # forward). No UPDATE needed.
 _ITEM_NEW_COLUMNS: dict[str, str] = {
     "image_url": "TEXT",
+    # Phase D-images: records when the og:image fallback last attempted a
+    # fetch for this item (see feed.models.Item.image_checked_at's
+    # docstring). Same additive-migration reasoning as image_url above:
+    # existing rows read back NULL, which is exactly "never attempted" --
+    # the correct value, not a wrong default needing a backfill UPDATE.
+    "image_checked_at": "DATETIME",
 }
 
 

@@ -13,6 +13,7 @@ from feed.config import BulkProviderConfig, Config, load_config
 from feed.db import create_all, make_engine, make_session_factory
 from feed.embedding import build_embedder
 from feed.embedding.resolve import resolve
+from feed.imaging import DEFAULT_HOST_DELAY, DEFAULT_MAX_WORKERS, resolve_images
 from feed.models import Item, Source, Stage, Story
 from feed.providers.base import Provider, ProviderError
 from feed.providers.claude_code import ClaudeCodeProvider
@@ -318,6 +319,63 @@ def cmd_publish(args, cfg: Config) -> int:
     return 0
 
 
+def cmd_backfill_images(args, cfg: Config) -> int:
+    """One-off (but safely re-runnable) sweep of the existing corpus for
+    items that never got a chance at the og:image fallback -- specifically
+    every item normalized before that fallback existed (see
+    feed.stages.normalize's D0 history: the fallback only runs going
+    forward, on items normalize() itself just processed; it never revisits
+    an item that already advanced past Stage.NORMALIZED). Uses the exact
+    same feed.imaging.resolve_images concurrent/rate-limited pass as the
+    normalize stage's own post-step -- one implementation, two call sites.
+
+    Resumable: candidates are selected by `image_checked_at IS NULL`, and
+    resolve_images() commits each item's result (image_url and
+    image_checked_at together) as soon as that item's fetch completes, not
+    in one batch at the end. Interrupting this command (Ctrl-C, a crash,
+    hitting --limit) and re-running it later picks up exactly where it
+    left off -- already-checked items are excluded from the next run's
+    candidate query without a separate "was this run interrupted" flag.
+    """
+    _, factory = _session(cfg)
+    with factory() as s:
+        stmt = (
+            select(Item)
+            .where(
+                (Item.image_url.is_(None)) | (Item.image_url == ""),
+                Item.image_checked_at.is_(None),
+                Item.stage != Stage.FAILED,
+            )
+            .order_by(Item.id)
+        )
+        if args.limit:
+            stmt = stmt.limit(args.limit)
+        items = list(s.scalars(stmt))
+        print(f"backfill-images: {len(items)} item(s) eligible "
+              f"(max_workers={args.max_workers} host_delay={args.host_delay}s)")
+        if not items:
+            return 0
+
+        def _progress(done: int, total: int) -> None:
+            if done == total or done % 20 == 0:
+                print(f"  ...{done}/{total} attempted", flush=True)
+
+        result = resolve_images(
+            s, items, max_workers=args.max_workers, host_delay=args.host_delay,
+            timeout=args.timeout, on_progress=_progress,
+        )
+        attempted = sum(sum(counts.values()) for counts in result.by_source.values())
+        print(f"backfill-images: attempted={attempted} gained={result.gained} "
+              f"sources={result.total_sources}")
+        for source_id in sorted(result.by_source):
+            counts = result.by_source[source_id]
+            gained = counts.pop("gained", 0)
+            reasons = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+            suffix = f"  ({reasons})" if reasons else ""
+            print(f"  {source_id:<28} gained={gained}{suffix}")
+    return 0
+
+
 def cmd_stats(args, cfg: Config) -> int:
     _, factory = _session(cfg)
     with factory() as s:
@@ -365,6 +423,22 @@ def build_parser() -> argparse.ArgumentParser:
     publish_p.add_argument("--out", type=Path, default=None,
                            help="bundle output directory (default: [publish].out_dir)")
     publish_p.set_defaults(func=cmd_publish)
+
+    backfill_p = sub.add_parser(
+        "backfill-images",
+        help="fetch og:image for existing items that never got a chance at it",
+    )
+    backfill_p.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS,
+                            help="bounded concurrency for the fetch pool "
+                                 f"(default: {DEFAULT_MAX_WORKERS})")
+    backfill_p.add_argument("--host-delay", type=float, default=DEFAULT_HOST_DELAY,
+                            help="minimum seconds between two requests to the "
+                                 f"same host (default: {DEFAULT_HOST_DELAY})")
+    backfill_p.add_argument("--timeout", type=float, default=15.0,
+                            help="per-request timeout in seconds (default: 15.0)")
+    backfill_p.add_argument("--limit", type=int, default=None,
+                            help="attempt at most N items (default: all eligible)")
+    backfill_p.set_defaults(func=cmd_backfill_images)
 
     srcs = sub.add_parser("sources").add_subparsers(dest="sub", required=True)
     add = srcs.add_parser("add")

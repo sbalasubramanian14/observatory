@@ -140,6 +140,23 @@ def _block_real_scraper_network(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _block_real_imaging_network(monkeypatch):
+    """Same guard, for feed.imaging (Phase D-images: the og:image/
+    twitter:image fallback used both by the normalize stage's post-step
+    and by `feed backfill-images`). fetch_og_image() calls the
+    module-level _get() seam rather than httpx directly so this can be
+    monkeypatched cleanly, mirroring every other source's network seam.
+    """
+    def _boom(*args, **kwargs):
+        raise AssertionError(
+            "real network call (feed.imaging._get) attempted during a "
+            "test; monkeypatch feed.imaging._get instead"
+        )
+
+    monkeypatch.setattr("feed.imaging._get", _boom)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_retry_sleep(monkeypatch):
     """feed.providers._retry.call_with_retry() backs off with a real
     time.sleep() between attempts in production. Left un-mocked, a test
@@ -148,6 +165,23 @@ def _no_real_retry_sleep(monkeypatch):
     test instant without needing each test to remember to patch it.
     """
     monkeypatch.setattr("feed.providers._retry._sleep", lambda seconds: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_imaging_sleep(monkeypatch):
+    """feed.imaging.HostThrottle backs off with a real time.sleep()
+    between two requests to the same host in production (the politeness
+    delay from the Phase D-images brief). Same rationale as
+    `_no_real_retry_sleep` above: left un-mocked, any test whose seeded
+    items happen to share a host -- a common fixture pattern, e.g. many
+    `https://example.com/...` URLs generated in one loop -- would
+    genuinely serialize at DEFAULT_HOST_DELAY seconds per item even though
+    the network call itself is already blocked/mocked and fails instantly.
+    tests/test_imaging.py's HostThrottle-specific timing tests restore the
+    real seam locally (monkeypatch.setattr(imaging, "_sleep", time.sleep))
+    since they exist specifically to prove the real delay behaviour.
+    """
+    monkeypatch.setattr("feed.imaging._sleep", lambda seconds: None)
 
 
 @pytest.fixture
