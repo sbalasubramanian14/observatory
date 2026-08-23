@@ -8,6 +8,19 @@
   margin-bottom: var(--space-6);
 }
 
+.heroTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+
+.heroTop .title {
+  margin-bottom: 0;
+}
+
 .title {
   font-size: var(--text-3xl);
   margin-bottom: var(--space-2);

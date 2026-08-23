@@ -8,6 +8,7 @@ import { markRead, recordSignal } from "@/lib/personalization";
 import type { StoryDetail } from "@/lib/types";
 import { CategoryTag } from "@/components/CategoryTag";
 import { ImportanceMeter } from "@/components/ImportanceMeter";
+import { LeadImage } from "@/components/LeadImage";
 import { formatAge, formatDateTime, hostnameOf, formatScore } from "@/lib/format";
 import styles from "./page.module.css";
 
@@ -71,6 +72,7 @@ function StoryDetailInner() {
 
       {detail && (
         <>
+          <LeadImage src={detail.lead_image_url} alt="" variant="hero" />
           <div className={styles.metaTop}>
             <CategoryTag category={detail.category} />
             <ImportanceMeter score={detail.score} />

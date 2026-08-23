@@ -36,6 +36,10 @@ export interface FeedStoryRow {
   id: number;
   item_count: number;
   kind: string | null;
+  /** URL reference to a publisher-hosted image, picked from the story's
+   * highest-authority contributing item — never bytes we host ourselves
+   * (spec §4.2). null is the common case; most stories have no image. */
+  lead_image_url: string | null;
   outlet_count: number;
   score: number;
   summary: string | null;
@@ -73,6 +77,7 @@ export interface StoryDetail {
   id: number;
   item_count: number;
   kind: string | null;
+  lead_image_url: string | null;
   outlet_count: number;
   score: number;
   score_breakdown: ScoreBreakdown;

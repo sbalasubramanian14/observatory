@@ -125,14 +125,38 @@ export function usePersonalization(): PersonalizationContextValue {
 
 // ---- read / saved / dismissed sets ------------------------------------
 
+// Same same-tab-sync gap as the toggle above: writing to localStorage
+// never fires `storage` in the tab that wrote it, so the saved-count badge
+// in the header and the /saved and /dismissed pages need their own signal
+// to notice a markSaved/unmarkSaved/markDismissed/unmarkDismissed call
+// made elsewhere on the same page (e.g. a StoryCard's Save button).
+const ID_SET_SYNC_EVENT = "observatory:idset-sync";
+
 function readIdSet(key: string): Set<number> {
   return new Set(readJson<number[]>(key, []));
+}
+
+/** Raw stored order (oldest first — each add appends), NOT deduplicated
+ * into a Set's insertion order guarantee by accident: JS Sets do preserve
+ * insertion order, but reading straight from the JSON array is the more
+ * direct way to expose "the order things were saved in" to callers like
+ * the /saved page, which reverses it for "most recently saved first". */
+function readIdListOrdered(key: string): number[] {
+  return readJson<number[]>(key, []);
 }
 
 function addToIdSet(key: string, id: number) {
   const set = readIdSet(key);
   set.add(id);
   writeJson(key, Array.from(set));
+  if (isBrowser()) window.dispatchEvent(new Event(ID_SET_SYNC_EVENT));
+}
+
+function removeFromIdSet(key: string, id: number) {
+  const set = readIdSet(key);
+  set.delete(id);
+  writeJson(key, Array.from(set));
+  if (isBrowser()) window.dispatchEvent(new Event(ID_SET_SYNC_EVENT));
 }
 
 export function getReadIds(): Set<number> {
@@ -147,16 +171,66 @@ export function getSavedIds(): Set<number> {
   return readIdSet(KEYS.saved);
 }
 
+export function getSavedIdsOrdered(): number[] {
+  return readIdListOrdered(KEYS.saved);
+}
+
 export function getDismissedIds(): Set<number> {
   return readIdSet(KEYS.dismissed);
+}
+
+export function getDismissedIdsOrdered(): number[] {
+  return readIdListOrdered(KEYS.dismissed);
 }
 
 export function markSaved(id: number) {
   addToIdSet(KEYS.saved, id);
 }
 
+export function unmarkSaved(id: number) {
+  removeFromIdSet(KEYS.saved, id);
+}
+
 export function markDismissed(id: number) {
   addToIdSet(KEYS.dismissed, id);
+}
+
+/** D3: undo an accidental dismiss. Only removes the id from the dismissed
+ * set — the story reappears in the main feed on its own next time (if it
+ * is still in the current bundle window and not also marked read). */
+export function unmarkDismissed(id: number) {
+  removeFromIdSet(KEYS.dismissed, id);
+}
+
+function subscribeIdSets(callback: () => void) {
+  window.addEventListener("storage", callback);
+  window.addEventListener(ID_SET_SYNC_EVENT, callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener(ID_SET_SYNC_EVENT, callback);
+  };
+}
+
+function getServerCountSnapshot(): number {
+  return 0;
+}
+
+/** Live count of saved stories, for the header badge (D2). */
+export function useSavedCount(): number {
+  return useSyncExternalStore(
+    subscribeIdSets,
+    () => getSavedIds().size,
+    getServerCountSnapshot,
+  );
+}
+
+/** Live count of dismissed stories, for the /dismissed page link (D3). */
+export function useDismissedCount(): number {
+  return useSyncExternalStore(
+    subscribeIdSets,
+    () => getDismissedIds().size,
+    getServerCountSnapshot,
+  );
 }
 
 // ---- centroids ----------------------------------------------------------

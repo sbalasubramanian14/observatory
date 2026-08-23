@@ -9,6 +9,7 @@ import { getStoryDetail } from "@/lib/bundle";
 import { formatAge, hostnameOf } from "@/lib/format";
 import { CategoryTag } from "./CategoryTag";
 import { ImportanceMeter } from "./ImportanceMeter";
+import { LeadImage } from "./LeadImage";
 import styles from "./StoryCard.module.css";
 
 export function StoryCard({
@@ -60,6 +61,7 @@ export function StoryCard({
   return (
     <article className={`${styles.card} ${reserved ? styles.reserved : ""}`}>
       <div className={styles.main}>
+        <LeadImage src={story.lead_image_url} alt="" variant="thumb" />
         <div className={styles.body}>
           {reserved && (
             <span className={styles.reservedBadge}>◆ Outside your usual — high importance</span>

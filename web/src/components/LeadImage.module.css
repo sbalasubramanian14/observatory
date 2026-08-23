@@ -1,0 +1,27 @@
+.wrap {
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+}
+
+.thumb {
+  width: 104px;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--radius-md);
+}
+
+.hero {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-5);
+  box-shadow: var(--shadow-sm);
+}
+
+@media (max-width: 560px) {
+  .thumb {
+    width: 76px;
+  }
+}
