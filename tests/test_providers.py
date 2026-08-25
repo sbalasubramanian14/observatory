@@ -173,11 +173,17 @@ def test_gemini_strips_reasoning_before_returning(monkeypatch):
     assert provider.complete("hi") == "the real answer"
 
 
+# Bound at collection, before conftest's autouse guard replaces the module
+# attribute -- test_claude_code_cli_encodes_stdin_as_utf8 tests the seam
+# itself, so it needs the genuine function rather than the guard.
+from feed.providers.claude_code import _run_cli as _REAL_RUN_CLI
+
 # --- ClaudeCodeProvider ---------------------------------------------------
 
 def test_claude_code_complete_returns_stripped_stdout(monkeypatch):
-    def fake_run(args, *, timeout):
-        assert args == ["claude", "-p", "why does this matter?"]
+    def fake_run(args, *, timeout, input=None):
+        assert args == ["claude", "-p"]      # prompt goes on stdin, not argv
+        assert input == "why does this matter?"
         return subprocess.CompletedProcess(args, 0, stdout="  analysis text  \n", stderr="")
 
     monkeypatch.setattr("feed.providers.claude_code._run_cli", fake_run)
@@ -187,7 +193,7 @@ def test_claude_code_complete_returns_stripped_stdout(monkeypatch):
 
 
 def test_claude_code_nonzero_exit_is_a_provider_error_not_a_crash(monkeypatch):
-    def fake_run(args, *, timeout):
+    def fake_run(args, *, timeout, input=None):
         return subprocess.CompletedProcess(args, 1, stdout="", stderr="rate limited")
 
     monkeypatch.setattr("feed.providers.claude_code._run_cli", fake_run)
@@ -198,7 +204,7 @@ def test_claude_code_nonzero_exit_is_a_provider_error_not_a_crash(monkeypatch):
 
 
 def test_claude_code_timeout_is_a_provider_error_not_a_crash(monkeypatch):
-    def fake_run(args, *, timeout):
+    def fake_run(args, *, timeout, input=None):
         raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)
 
     monkeypatch.setattr("feed.providers.claude_code._run_cli", fake_run)
@@ -209,7 +215,7 @@ def test_claude_code_timeout_is_a_provider_error_not_a_crash(monkeypatch):
 
 
 def test_claude_code_empty_output_is_a_provider_error(monkeypatch):
-    def fake_run(args, *, timeout):
+    def fake_run(args, *, timeout, input=None):
         return subprocess.CompletedProcess(args, 0, stdout="   ", stderr="")
 
     monkeypatch.setattr("feed.providers.claude_code._run_cli", fake_run)
@@ -220,7 +226,7 @@ def test_claude_code_empty_output_is_a_provider_error(monkeypatch):
 
 
 def test_claude_code_strips_reasoning_before_returning(monkeypatch):
-    def fake_run(args, *, timeout):
+    def fake_run(args, *, timeout, input=None):
         return subprocess.CompletedProcess(
             args, 0, stdout="<think>mulling it over</think>the actual analysis", stderr="",
         )
@@ -323,3 +329,82 @@ def test_router_never_upgrades_a_bulk_request_even_if_deep_is_healthy():
 
     assert result.provider == "gemini"
     assert deep.calls == []
+
+
+def test_claude_code_sends_the_prompt_on_stdin_not_as_an_argument(monkeypatch):
+    """Windows caps a whole command line at ~32,767 characters, so passing
+    the prompt as argv raises `[WinError 206] The filename or extension is
+    too long` once it grows. This is not hypothetical: the Top 50 ranking
+    prompt carries ~100 headlines with summaries, and it failed in
+    production the first run where enough stories had been summarized --
+    silently degrading to the BULK provider, so the "ranked by Claude Code"
+    feature quietly stopped being ranked by Claude Code.
+
+    stdin has no such limit.
+    """
+    seen = {}
+
+    def fake_run(args, *, timeout, input=None):
+        seen["args"] = args
+        seen["input"] = input
+        return subprocess.CompletedProcess(args, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("feed.providers.claude_code._run_cli", fake_run)
+    huge = "x" * 40_000
+
+    assert ClaudeCodeProvider().complete(huge) == "ok"
+    assert seen["input"] == huge
+    assert huge not in " ".join(seen["args"])
+    # A whole command line this size is what WinError 206 rejects.
+    assert len(" ".join(seen["args"])) < 1000
+
+
+def test_claude_code_cli_encodes_stdin_as_utf8(monkeypatch):
+    """subprocess with `text=True` encodes stdin using the LOCALE codec,
+    which on Windows is cp1252. AI summaries are full of typographic
+    characters -- non-breaking hyphens, curly apostrophes, em dashes -- and
+    cp1252 cannot represent them, so the stdin write raises
+    UnicodeEncodeError, the CLI receives nothing, waits three seconds and
+    exits 1.
+
+    The router then degrades to BULK, so this surfaces as a feature quietly
+    doing something else rather than as an error: the Top 50 kept getting
+    written, just by Mistral instead of Claude Code. Pure-ASCII test
+    prompts sail straight past it, which is exactly why it reached
+    production.
+
+    Asserts on the seam function itself -- this is the one place where the
+    subprocess kwargs ARE the behaviour under test.
+    """
+    from feed.providers import claude_code
+
+    seen = {}
+
+    def fake_subprocess_run(args, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(args, 0, stdout="ok", stderr="")
+
+    # No real process is spawned -- subprocess.run itself is replaced. The
+    # module-level _REAL_RUN_CLI is needed because conftest's autouse guard
+    # swaps the module attribute out, and the seam is what we are testing.
+    monkeypatch.setattr(claude_code.subprocess, "run", fake_subprocess_run)
+
+    _REAL_RUN_CLI(["claude", "-p"], timeout=10, input="non-breaking‑hyphen")
+
+    assert seen.get("encoding") == "utf-8"
+
+
+def test_claude_code_round_trips_typographic_characters(monkeypatch):
+    """The end-to-end shape of the same bug: a prompt carrying the exact
+    character that broke production must reach the CLI intact."""
+    seen = {}
+
+    def fake_run(args, *, timeout, input=None):
+        seen["input"] = input
+        return subprocess.CompletedProcess(args, 0, stdout="fine", stderr="")
+
+    monkeypatch.setattr("feed.providers.claude_code._run_cli", fake_run)
+
+    prompt = "Rank these:\n- GPT‑5.6 price‑performance — OpenAI’s move"
+    assert ClaudeCodeProvider().complete(prompt) == "fine"
+    assert seen["input"] == prompt
