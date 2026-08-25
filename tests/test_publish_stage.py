@@ -306,3 +306,40 @@ def test_publish_refuses_to_write_anything_when_schema_validation_fails(session,
     assert result.published is False
     assert result.error is not None
     assert not (tmp_path / "manifest.json").exists()
+
+
+def _feed_page(tmp_path):
+    """The single feed page a small fixture always produces."""
+    pages = sorted((tmp_path / "feed").glob("page-*.json"))
+    assert len(pages) == 1, pages
+    return _read_json(pages[0])
+
+
+def test_publish_carries_the_top50_judgement_onto_feed_cards(session, tmp_path):
+    """The /top page and the rank badge both read these straight off the
+    feed page, so a card renders its band without a second fetch."""
+    story = _seed_story(session, score=0.5)
+    story.importance_rank = 1
+    story.importance_band = "landmark"
+    story.importance_reason = "Because it matters."
+    session.commit()
+
+    publish(session, PublishConfig(), tmp_path)
+
+    row = _feed_page(tmp_path)["stories"][0]
+    assert row["importance_rank"] == 1
+    assert row["importance_band"] == "landmark"
+    assert row["importance_reason"] == "Because it matters."
+
+
+def test_publish_emits_nulls_for_stories_outside_the_top50(session, tmp_path):
+    """Most stories are unranked. The keys must be present and null rather
+    than absent, so the client never has to tell the two cases apart."""
+    _seed_story(session, score=0.4)
+
+    publish(session, PublishConfig(), tmp_path)
+
+    row = _feed_page(tmp_path)["stories"][0]
+    assert row["importance_rank"] is None
+    assert row["importance_band"] is None
+    assert row["importance_reason"] is None

@@ -149,5 +149,5 @@ out_dir = "public"
 # regardless, so raising this number and re-publishing brings the older
 # ones straight back. Comfortably wider than [collect].max_backfill_days
 # above, so consecutive daily runs keep the window full.
-retention_days = 5
+retention_days = 2
 page_size = 50

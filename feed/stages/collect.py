@@ -46,20 +46,52 @@ def _effective_since(
 
 
 def collect(
-    session: Session, *, now: datetime | None = None, cfg: CollectConfig | None = None
+    session: Session, *, now: datetime | None = None, cfg: CollectConfig | None = None,
+    backfill_days: int | None = None, ignore_cadence: bool = False,
+    only_source_ids: set[str] | None = None,
 ) -> CollectResult:
+    """Fetch due sources and insert new items at Stage.COLLECTED.
+
+    The three keyword arguments after `cfg` exist for one job -- repairing a
+    source that the ordinary schedule can never recover. A source is only
+    ever asked for items newer than `now - max_backfill_days` (2), and
+    last_run_at advances on every success, so the window only moves
+    forward. A publisher that posts less often than the cap therefore stays
+    permanently empty: each run its newest post is already outside the
+    window, and no later run will ever look further back. Anthropic (posts
+    roughly weekly) is the worked example -- its scraper returns 10 correct,
+    correctly-dated items, and had contributed exactly zero.
+
+    `backfill_days` widens the reach for this run, `ignore_cadence` runs
+    off-schedule because a human asked now, and `only_source_ids` keeps the
+    repair from re-crawling all 31 sources. All three default to the
+    ordinary behaviour.
+    """
     now = now or datetime.now(timezone.utc)
     cfg = cfg or CollectConfig()
     result = CollectResult()
 
     for src in session.scalars(select(Source).where(Source.enabled.is_(True))):
-        if src.last_run_at is not None:
+        if only_source_ids is not None and src.id not in only_source_ids:
+            continue
+        if not ignore_cadence and src.last_run_at is not None:
             due = src.last_run_at + timedelta(minutes=src.cadence_minutes)
             if now < due:
                 continue
 
-        cap_days = src.max_backfill_days if src.max_backfill_days is not None else cfg.max_backfill_days
-        effective_since, capped = _effective_since(src.last_run_at, now, cap_days)
+        if backfill_days is not None:
+            cap_days = backfill_days
+        elif src.max_backfill_days is not None:
+            cap_days = src.max_backfill_days
+        else:
+            cap_days = cfg.max_backfill_days
+        # A repair deliberately reaches PAST last_run_at, which the ordinary
+        # path never does (_effective_since takes the later of the two, so
+        # a source polled an hour ago would still be asked only for that
+        # hour). Passing last_run_at=None is what makes "go back 90 days"
+        # mean 90 days rather than "since the last successful run".
+        since_anchor = None if backfill_days is not None else src.last_run_at
+        effective_since, capped = _effective_since(since_anchor, now, cap_days)
 
         # I7 fix: the item-insert loop and both commits below used to sit
         # OUTSIDE this try -- only fetch() was covered. A DB error there

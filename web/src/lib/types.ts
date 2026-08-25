@@ -50,6 +50,34 @@ export interface FeedStoryRow {
   summary: string | null;
   title: string;
   updated_at: string;
+  /** Top 50 (feed/stages/rank.py). `score` above is arithmetic — authority
+   * + velocity + novelty — and structurally cannot tell a frontier release
+   * from a heavily syndicated funding round. These three carry the DEEP
+   * provider's *judgement* instead, and are null together for the great
+   * majority of stories, which are outside the current Top N. */
+  importance_rank: number | null;
+  importance_band: ImportanceBand | null;
+  importance_reason: string | null;
+}
+
+/** Rendered as groups in this order — mirrors feed.stages.rank.BANDS. */
+export const IMPORTANCE_BANDS = ["landmark", "significant", "notable"] as const;
+export type ImportanceBand = (typeof IMPORTANCE_BANDS)[number];
+
+export const BAND_LABELS: Record<ImportanceBand, string> = {
+  landmark: "Landmark",
+  significant: "Significant",
+  notable: "Notable",
+};
+
+export const BAND_BLURBS: Record<ImportanceBand, string> = {
+  landmark: "Changes what is possible or what is permitted. Missing these leaves you out of date.",
+  significant: "Matters to people working in the area. Worth knowing this week.",
+  notable: "Genuinely interesting, but nothing downstream depends on it.",
+};
+
+export function isImportanceBand(v: unknown): v is ImportanceBand {
+  return typeof v === "string" && (IMPORTANCE_BANDS as readonly string[]).includes(v);
 }
 
 export interface FeedPage {

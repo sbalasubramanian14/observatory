@@ -30,6 +30,7 @@ from feed.stages.embed import embed
 from feed.stages.enrich import enrich
 from feed.stages.normalize import normalize
 from feed.stages.publish import publish
+from feed.stages.rank import DEFAULT_TOP_N, rank_top
 from feed.stages.relevance import gate_relevance, sweep_existing_corpus
 from feed.stages.score import score_stories
 from feed.stages.sync import sync_sources
@@ -154,6 +155,42 @@ def cmd_sources_list(args, cfg: Config) -> int:
             territory = src.territory or "-"
             print(f"{src.id:<28} {src.plugin:<18} {territory:<15} "
                  f"every {src.cadence_minutes:>4}m  {state}")
+    return 0
+
+
+def cmd_sources_backfill(args, cfg: Config) -> int:
+    """Repair sources that the ordinary schedule can never fill.
+
+    Collect only ever asks for items newer than `now - max_backfill_days`
+    (2), and last_run_at advances on every success, so the window only ever
+    moves forward. A publisher that posts less often than that cap is
+    invisible forever: every run, its newest post already predates the
+    window. Measured on the live catalogue -- Anthropic, Google AI,
+    Microsoft Research, AMD and six others returned exactly zero items each
+    while every one of their connectors was working correctly.
+
+    This reaches back `--days` regardless of last_run_at and ignores the
+    cadence gate, because it runs when a human asks rather than on
+    schedule. It only collects; run `feed run` afterwards to push the new
+    items through normalize -> score.
+    """
+    _, factory = _session(cfg)
+    only = set(args.id) if args.id else None
+    with factory() as s:
+        if only:
+            known = {sid for sid in s.scalars(select(Source.id))}
+            missing = only - known
+            if missing:
+                print(f"unknown source id(s): {', '.join(sorted(missing))}", file=sys.stderr)
+                return 2
+        res = collect(s, cfg=cfg.collect, backfill_days=args.days,
+                      ignore_cadence=True, only_source_ids=only)
+    scope = ", ".join(sorted(only)) if only else "all enabled sources"
+    print(f"backfill ({args.days}d, {scope}): new={res.new_items} "
+          f"dupes={res.skipped_duplicates} source_errors={len(res.source_errors)}")
+    for sid, err in sorted(res.source_errors.items()):
+        print(f"  ERROR {sid}: {err}", file=sys.stderr)
+    print("run `feed run` next to push the new items through the pipeline.")
     return 0
 
 
@@ -378,6 +415,31 @@ def cmd_publish(args, cfg: Config) -> int:
     return 0
 
 
+def cmd_rank(args, cfg: Config) -> int:
+    """Top 50: ask the DEEP provider (Claude Code) to judge importance.
+
+    `score` is arithmetic -- authority + velocity + novelty -- and is
+    structurally unable to tell a frontier release from a heavily
+    syndicated funding round. Here the score only nominates a shortlist;
+    Claude Code reads it and assigns each story a band. See
+    feed/stages/rank.py.
+    """
+    router = _build_router(cfg)
+    _, factory = _session(cfg)
+    days = args.days if args.days is not None else cfg.publish.retention_days
+    with factory() as s:
+        res = rank_top(s, router, cfg.providers, top_n=args.top, window_days=days)
+    if res.error:
+        # Non-zero so the pipeline records a degraded run, but the previous
+        # Top N is still on the site -- rank_top writes nothing on failure.
+        print(f"rank failed (previous top {args.top} left in place): {res.error}",
+              file=sys.stderr)
+        return 1
+    print(f"rank:      ranked={res.ranked} rejected={res.rejected} "
+          f"cleared={res.cleared} window={days}d by={res.provider}")
+    return 0
+
+
 def cmd_pipeline(args, cfg: Config) -> int:
     """The one-click entry point (spec Phase F): sources sync -> run ->
     enrich -> publish -> push the bundle to observatory-almanac. See
@@ -563,6 +625,17 @@ def build_parser() -> argparse.ArgumentParser:
                                 "[publish].retention_days for this run only")
     publish_p.set_defaults(func=cmd_publish)
 
+    rank_p = sub.add_parser(
+        "rank",
+        help="Top 50: have the DEEP provider (Claude Code) judge importance",
+    )
+    rank_p.add_argument("--top", type=_positive_days, default=DEFAULT_TOP_N,
+                        help=f"how many stories to rank (default: {DEFAULT_TOP_N})")
+    rank_p.add_argument("--days", type=_positive_days, default=None,
+                        help="window to rank within (default: [publish].retention_days, "
+                             "so the Top N matches what the bundle actually carries)")
+    rank_p.set_defaults(func=cmd_rank)
+
     pipeline_p = sub.add_parser(
         "pipeline",
         help="one-click run: sources sync -> run -> enrich -> publish -> push to observatory-almanac",
@@ -626,6 +699,16 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--catalogue", type=Path, default=DEFAULT_CATALOGUE_PATH,
                       help="path to the source catalogue TOML (default: sources.catalogue.toml)")
     sync.set_defaults(func=cmd_sources_sync)
+    bf = srcs.add_parser(
+        "backfill",
+        help="reach back further than [collect].max_backfill_days for sources "
+             "whose publisher posts less often than the cap",
+    )
+    bf.add_argument("--days", type=_positive_days, required=True,
+                    help="how many days back to fetch, ignoring last_run_at")
+    bf.add_argument("--id", action="append", default=None,
+                    help="limit to this source id (repeatable; default: every enabled source)")
+    bf.set_defaults(func=cmd_sources_backfill)
 
     rel = sub.add_parser("relevance").add_subparsers(dest="sub", required=True)
     sweep = rel.add_parser("sweep")

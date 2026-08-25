@@ -22,9 +22,9 @@ the rest affordable. Roughly 1,700 items a day become ~350 summarization calls.
 ## How it works
 
 ```
-sources → COLLECT → NORMALIZE → EMBED → CLUSTER → SCORE → ENRICH → PUBLISH
-          31 feeds   extract     local    multi-    4 free  LLM     static
-          + scrapers  text       model    signal    signals tiers   bundle
+sources → COLLECT → NORMALIZE → EMBED → CLUSTER → SCORE → ENRICH → RANK → PUBLISH
+          31 feeds   extract     local    multi-    4 free  LLM    Claude  static
+          + scrapers  text       model    signal    signals tiers  Code    bundle
 ```
 
 **SQLite is both the store and the work queue.** Every item carries a `stage` column;
@@ -68,6 +68,23 @@ Gemini. On a real run of 373 stories, Groq exhausted its daily quota after 56 an
 auto-disabled; Mistral absorbed 316; **zero stories were lost.** Free tiers have no SLA,
 so the answer is several of them rather than a better one.
 
+### Top 50: importance as judged, not as computed
+
+The score below is arithmetic, and that makes it honest about *reach* while
+leaving it blind to *meaning* — a heavily syndicated funding round and a frontier
+capability result look identical to it. Measured on a live window: the top fifty stories
+all scored between 0.50 and 0.52, which is no ranking at all.
+
+So the score only nominates. A shortlist of twice the target size goes to Claude Code in
+a single comparative call, which places each story in a band — **landmark** (changes what
+is possible or permitted), **significant** (matters to people working in the area),
+**notable** (interesting, nothing depends on it) — with one sentence saying why. `/top`
+renders those groups.
+
+Ranks are rewritten wholesale each run, so the list rotates instead of accumulating. A
+failed ranking writes nothing at all: the site keeps yesterday's judgement, because stale
+judgement beats an empty page.
+
 ### Importance is reader-independent
 
 The published score is `authority + velocity + novelty`, where **velocity counts distinct
@@ -88,7 +105,7 @@ is deployed once and fetches it at runtime, so **new data needs no redeploy**. I
 makes the service worker's caching trivially correct: cache hashed files forever,
 revalidate only the manifest.
 
-The bundle carries a **rolling 5-day window** of news, so the feed stays about what is
+The bundle carries a **rolling window** of news (currently 2 days), so the feed stays about what is
 happening rather than what has happened. That number is `[publish].retention_days`, and
 `observatory.bat 7` overrides it for a single run. Narrowing it destroys nothing: the
 database keeps every story regardless, so widening the window and re-publishing brings
@@ -113,6 +130,14 @@ config-driven `ScraperSource` (CSS selectors, `robots.txt` respected).
 Broken connectors are surfaced on a **health page**, because silent coverage loss is the
 failure mode that defeats the whole product.
 
+**A source can also be silently empty without being broken.** Collect only asks for items
+newer than `now - max_backfill_days`, and `last_run_at` advances on every success, so the
+window only ever moves forward. A publisher that posts less often than that cap is
+invisible forever — each run, its newest post already predates the window. Nine sources,
+Anthropic among them, had contributed exactly zero items while every one of their
+connectors worked correctly. `feed sources backfill --days 120` is the way back; it
+ignores both the cap and the cadence gate.
+
 ## Running it
 
 ```bash
@@ -130,9 +155,17 @@ py -3.14 -m venv .venv
 Or `observatory.bat` for the whole chain including publishing:
 
 ```
-observatory.bat            full run; window from feed.toml
+observatory.bat            full run; window from feed.toml (currently 2 days)
 observatory.bat 7          full run; publish only the last 7 days
 observatory.bat 7 dryrun   print the command it would run, and stop
+```
+
+Repairing a source that publishes less often than the collect cap:
+
+```
+feed sources backfill --days 120           # every source
+feed sources backfill --days 120 --id anthropic
+feed run                                   # push the new items through
 ```
 
 Provider keys go in a gitignored `.env` (`GROQ_API_KEY`, `MISTRAL_API_KEY`,

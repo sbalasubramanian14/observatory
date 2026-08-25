@@ -641,3 +641,98 @@ def test_publish_days_flag_rejects_zero_and_negative_values(tmp_path, capsys):
     for bad in ("0", "-3"):
         with pytest.raises(SystemExit):
             main(["--config", str(cfg), "publish", "--days", bad])
+
+
+def test_sources_backfill_recovers_items_the_cadence_window_skipped(tmp_path, capsys):
+    """`feed sources backfill --days N` is the repair for a publisher that
+    posts less often than [collect].max_backfill_days -- without it those
+    sources stay empty forever, because the fetch window only moves
+    forward. Seeds a source already marked as just-run, which the ordinary
+    cadence gate would skip entirely."""
+    from datetime import datetime, timezone
+    from feed.config import load_config
+    from feed.db import create_all, make_engine, make_session_factory
+    from feed.models import Item, Source
+
+    cfg = tmp_path / "feed.toml"
+    cfg.write_text(
+        f'[database]\nurl = "sqlite:///{(tmp_path / "t.db").as_posix()}"\n'
+        "[collect]\nmax_backfill_days = 2\n",
+        encoding="utf-8",
+    )
+    main(["--config", str(cfg), "init"])
+
+    conf = load_config(cfg)
+    factory = make_session_factory(make_engine(conf.database.url))
+    with factory() as s:
+        s.add(Source(id="rss:example", plugin="rss", config={"path": str(FIX)},
+                     cadence_minutes=600, enabled=True,
+                     last_run_at=datetime.now(timezone.utc)))
+        s.commit()
+
+    rc = main(["--config", str(cfg), "sources", "backfill", "--days", "3650"])
+
+    assert rc == 0
+    with factory() as s:
+        assert s.query(Item).count() == 2
+    assert "backfill" in capsys.readouterr().out
+
+
+def test_sources_backfill_can_target_one_source(tmp_path):
+    from datetime import datetime, timezone
+    from feed.config import load_config
+    from feed.db import make_engine, make_session_factory
+    from feed.models import Item, Source
+
+    cfg = _cfg(tmp_path)
+    main(["--config", str(cfg), "init"])
+    conf = load_config(cfg)
+    factory = make_session_factory(make_engine(conf.database.url))
+    with factory() as s:
+        for sid in ("rss:one", "rss:two"):
+            s.add(Source(id=sid, plugin="rss", config={"path": str(FIX)},
+                         cadence_minutes=600, enabled=True,
+                         last_run_at=datetime.now(timezone.utc)))
+        s.commit()
+
+    rc = main(["--config", str(cfg), "sources", "backfill",
+               "--days", "3650", "--id", "rss:one"])
+
+    assert rc == 0
+    with factory() as s:
+        assert {i.source_id for i in s.query(Item).all()} == {"rss:one"}
+
+
+def test_rank_command_writes_the_top50_judgement(tmp_path, capsys, monkeypatch):
+    """`feed rank` is what the pipeline invokes between enrich and publish."""
+    import json as _json
+    import feed.cli as cli_module
+    from feed.providers.base import Tier
+    from feed.providers.router import Router
+
+    cfg = _cfg(tmp_path)
+    main(["--config", str(cfg), "init"])
+    story_id = _seed_scored_story(cfg, score=0.9)
+
+    verdict = _json.dumps({"ranked": [
+        {"id": story_id, "rank": 1, "band": "landmark", "reason": "It matters."}
+    ]})
+    deep = _FakeCliProvider("claude-code", "claude-code", Tier.DEEP, verdict)
+    bulk = _FakeCliProvider("groq", "m", Tier.BULK, "{}")
+    monkeypatch.setattr(cli_module, "_build_router",
+                        lambda cfg: Router(bulk=bulk, deep=deep))
+
+    rc = main(["--config", str(cfg), "rank", "--top", "50"])
+
+    assert rc == 0
+    assert "ranked=1" in capsys.readouterr().out
+
+    from feed.config import load_config
+    from feed.db import make_engine, make_session_factory
+    from feed.models import Story
+    conf = load_config(cfg)
+    with make_session_factory(make_engine(conf.database.url))() as s:
+        story = s.get(Story, story_id)
+        assert story.importance_rank == 1
+        assert story.importance_band == "landmark"
+        assert story.ranked_by == "claude-code:claude-code"

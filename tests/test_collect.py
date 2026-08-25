@@ -409,3 +409,55 @@ def test_collect_persists_and_honours_last_request_at_across_two_separate_runs(s
     src = session.get(Source, "arxiv:ai")
     assert sleeps == [pytest.approx(2.0)]  # 3.0s owed - 1.0s elapsed
     assert src.last_request_at == t2
+
+
+# ---- backfill repair (infrequent publishers) --------------------------
+#
+# A source is only ever asked for items newer than `now - max_backfill_days`
+# (2 by default), and last_run_at advances on every success. So a publisher
+# that posts less often than the cap -- Anthropic posts roughly weekly --
+# can be polled forever and contribute nothing: on each run its newest post
+# is already older than the window, and the window only ever moves forward.
+# `feed backfill` is the way back: reach further, and ignore cadence,
+# because the whole point is to run off-schedule.
+
+def test_backfill_days_overrides_the_configured_cap(session):
+    """The repair reaches further back than max_backfill_days, otherwise it
+    cannot recover anything the cap has already skipped past."""
+    _add_source(session)
+    res = collect(session, now=NOW, cfg=CollectConfig(max_backfill_days=2),
+                  backfill_days=90, ignore_cadence=True)
+    assert res.new_items == 2
+
+
+def test_backfill_ignores_the_cadence_gate(session):
+    """Every source is normally skipped until last_run_at + cadence. A
+    repair run happens because a human asked for it now, so it must not
+    wait for the schedule."""
+    _add_source(session, cadence_minutes=600, last_run_at=NOW)
+    blocked = collect(session, now=NOW + timedelta(minutes=1))
+    assert blocked.new_items == 0
+
+    res = collect(session, now=NOW + timedelta(minutes=1),
+                  backfill_days=90, ignore_cadence=True)
+    assert res.new_items == 2
+
+
+def test_backfill_can_target_a_single_source(session):
+    """Repairing one broken connector must not re-crawl all 31 -- that is
+    minutes of needless network traffic and a way to trip rate limits."""
+    _add_source(session, id="rss:one")
+    _add_source(session, id="rss:two")
+
+    res = collect(session, now=NOW, backfill_days=90, ignore_cadence=True,
+                  only_source_ids={"rss:one"})
+
+    assert res.new_items == 2
+    assert {i.source_id for i in session.query(Item).all()} == {"rss:one"}
+
+
+def test_normal_collect_still_honours_cadence_and_cap(session):
+    """The repair path must be opt-in: default collect() is unchanged."""
+    _add_source(session, cadence_minutes=600, last_run_at=NOW)
+    res = collect(session, now=NOW + timedelta(minutes=1))
+    assert res.new_items == 0

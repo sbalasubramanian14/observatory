@@ -114,7 +114,15 @@ def enrich_tier1(session: Session, router: Router, cfg: ProvidersConfig,
     story_ids = session.scalars(
         select(Story.id)
         .where(Story.status == StoryStatus.NEW, Story.score.is_not(None))
-        .order_by(Story.id)
+        # Newest first, NOT `.order_by(Story.id)`. Id order is insertion
+        # order, i.e. oldest first -- precisely backwards for a feed that
+        # publishes a rolling window of recent news. Whenever the backlog
+        # exceeds `limit`, id order spends every call on stories too old to
+        # be published while the ones a reader is actually looking at stay
+        # "Uncategorized". Measured on the live bundle before this changed:
+        # 328 published stories, only 110 with a summary.
+        # Story.id breaks ties so the order stays deterministic.
+        .order_by(Story.updated_at.desc(), Story.id.desc())
         .limit(limit)
     ).all()
 

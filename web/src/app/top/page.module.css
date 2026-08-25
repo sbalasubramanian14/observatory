@@ -1,0 +1,168 @@
+.container {
+  max-width: var(--content-width-wide);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5) var(--space-8);
+}
+
+.title {
+  font-size: var(--text-3xl);
+  margin-bottom: var(--space-2);
+}
+
+.subtitle {
+  color: var(--color-text-secondary);
+  font-size: var(--text-md);
+  max-width: 62ch;
+  margin: 0 0 var(--space-6);
+}
+
+.state {
+  color: var(--color-text-secondary);
+  font-size: var(--text-base);
+}
+
+.errorState {
+  color: var(--color-danger, var(--color-text-primary));
+}
+
+.empty {
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6) var(--space-5);
+  text-align: center;
+}
+
+.emptyTitle {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  margin: 0 0 var(--space-2);
+}
+
+.emptyBody {
+  color: var(--color-text-secondary);
+  font-size: var(--text-base);
+  max-width: 52ch;
+  margin: 0 auto;
+}
+
+.code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.9em;
+  background: var(--color-surface-sunken);
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.4em;
+}
+
+/* --- bands ---------------------------------------------------------- */
+
+.band {
+  margin-bottom: var(--space-7);
+}
+
+.bandHeader {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.bandTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xl);
+  margin: 0 0 var(--space-1);
+}
+
+.bandDot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: var(--radius-pill);
+  flex: none;
+}
+
+/* Three steps of the same accent rather than a traffic-light palette:
+   these are degrees of one quantity, and red/amber/green would read as
+   "bad/warning/good", which is not what a band means. */
+.landmark {
+  background: var(--color-accent-strong);
+}
+
+.significant {
+  background: var(--color-accent);
+}
+
+.notable {
+  background: var(--color-border-strong);
+}
+
+.bandCount {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  background: var(--color-surface-sunken);
+  border-radius: var(--radius-pill);
+  padding: 0.1rem var(--space-2);
+}
+
+.bandBlurb {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  max-width: 62ch;
+  margin: 0;
+}
+
+/* --- rows ----------------------------------------------------------- */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.item {
+  display: grid;
+  grid-template-columns: 2.5rem 1fr;
+  align-items: start;
+  gap: var(--space-3);
+}
+
+.rank {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding-top: var(--space-3);
+}
+
+.rowWrap {
+  min-width: 0;
+}
+
+.reason {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-style: italic;
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--color-accent-soft);
+}
+
+@media (max-width: 640px) {
+  .container {
+    padding: var(--space-5) var(--space-3) var(--space-7);
+  }
+
+  .item {
+    grid-template-columns: 1.75rem 1fr;
+    gap: var(--space-2);
+  }
+
+  .rank {
+    font-size: var(--text-base);
+    padding-top: var(--space-2);
+  }
+}

@@ -40,6 +40,15 @@ _STORY_NEW_COLUMNS: dict[str, str] = {
     # analysis_provider). Same additive-migration reasoning as above: an
     # existing feed.db's `story` table predates this column.
     "summary_provider": "VARCHAR(128)",
+    # Top 50 (feed/stages/rank.py). Same additive-migration reasoning: an
+    # existing feed.db's `story` table predates these. NULL is the
+    # semantically correct value for every pre-existing row -- "not in the
+    # current Top N" -- so unlike `status` above, no backfill is needed.
+    "importance_rank": "INTEGER",
+    "importance_band": "VARCHAR(16)",
+    "importance_reason": "TEXT",
+    "ranked_at": "DATETIME",
+    "ranked_by": "VARCHAR(128)",
 }
 
 # Same additive-migration reasoning, for columns the phaseA collect-stage

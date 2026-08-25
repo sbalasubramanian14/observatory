@@ -128,6 +128,14 @@ def _feed_page_story_dict(story: Story, *, detail_path: str, detail_hash: str) -
         # Web source/territory filter (see FeedPageStory.source_ids):
         # sorted so the same membership always serializes identically.
         "source_ids": sorted({it.source_id for it in story.items}),
+        # Top 50 (feed/stages/rank.py). Carried on the feed row rather than
+        # in a separate top.json: the /top page is then a filter+sort over
+        # data the client already has, and a card anywhere in the feed can
+        # show its band with no extra fetch. null for the great majority of
+        # stories, which are not in the current Top N.
+        "importance_rank": story.importance_rank,
+        "importance_band": story.importance_band,
+        "importance_reason": story.importance_reason,
     }
 
 

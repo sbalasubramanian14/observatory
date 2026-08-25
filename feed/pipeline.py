@@ -158,6 +158,13 @@ def _stage_specs(*, catalogue: Path | None, out_dir: Path | None,
     # db, only the published subset changed.
     if days is not None:
         publish_args += ["--days", str(days)]
+    # Rank gets the SAME window as publish. "Top 50" means the top of what
+    # a reader can actually see, so ranking a wider (or narrower) set than
+    # the bundle carries would put stories on the Top 50 page that are not
+    # in the feed at all.
+    rank_args = ["rank"]
+    if days is not None:
+        rank_args += ["--days", str(days)]
     return [
         # Non-fatal (spec: source failures are normal, already visible on the
         # health page). A sync failure just means sources didn't change this
@@ -174,6 +181,14 @@ def _stage_specs(*, catalogue: Path | None, out_dir: Path | None,
         # "publishing failing should not lose the enrichment work" cuts the
         # other way too -- enrichment failing must not block publish.
         _StageSpec("enrich", ["enrich"], fatal_if_failed=False),
+        # Non-fatal, and deliberately AFTER enrich: rank judges importance
+        # from the Tier 1 headline and summary, so running it earlier would
+        # ask Claude Code to rank bare, unsummarised titles. Non-fatal
+        # because Claude Code is a local CLI with no SLA -- losing today's
+        # Top 50 leaves the feed degraded, and rank_top() explicitly keeps
+        # the previous ranking on failure rather than blanking the page.
+        # Losing publish, by contrast, kills the site for the day.
+        _StageSpec("rank", rank_args, fatal_if_failed=False),
         # FATAL: this is the one stage that produces the bundle. If it
         # fails there is nothing new (or nothing valid) to push, so the
         # almanac step is skipped entirely rather than pushing stale/absent

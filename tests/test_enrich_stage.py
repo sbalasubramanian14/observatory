@@ -299,3 +299,44 @@ def test_enrich_runs_tier1_then_tier2_in_one_pass(session):
 
     assert result.tier1_processed == 1
     assert result.tier2_processed == 1
+
+
+def test_tier1_enriches_the_newest_stories_first(session):
+    """Tier 1 used to select `.order_by(Story.id)` -- insertion order, i.e.
+    OLDEST first. That is backwards for a feed that publishes a rolling
+    window of recent news: with a backlog larger than the per-run limit,
+    every call is spent on stories too old to be published, and the ones a
+    reader actually sees stay "Uncategorized" indefinitely. Measured on the
+    live bundle before this fix: 328 published stories, 110 summarized.
+
+    Story ids here deliberately run opposite to the dates, so ordering by
+    id and ordering by recency give different answers -- otherwise the
+    assertion would pass either way.
+    """
+    now = datetime.now(timezone.utc)
+    session.add(Source(id="s", plugin="rss", config={}, cadence_minutes=30))
+    session.flush()
+    ids: dict[str, int] = {}
+    for age_days, title in ((30, "oldest"), (10, "middle"), (1, "newest")):
+        when = now - timedelta(days=age_days)
+        story = Story(title=title, first_seen=when, updated_at=when, item_count=1,
+                      score=0.5, status=StoryStatus.NEW)
+        session.add(story)
+        session.flush()
+        ids[title] = story.id
+        session.add(Item(source_id="s", url=f"http://x/{title}", url_hash=f"h-{title}",
+                         title=title, story_id=story.id))
+    session.commit()
+    # Insertion order is oldest -> newest, so the lowest id is the oldest
+    # story: `.order_by(Story.id)` would pick exactly the wrong one.
+    assert ids["oldest"] < ids["newest"]
+
+    bulk = _FakeProvider("g", "m", Tier.BULK, responses=[TIER1_JSON])
+    router = Router(bulk=bulk, deep=_FakeProvider("c", "c", Tier.DEEP))
+
+    enrich_tier1(session, router, ProvidersConfig(), limit=1)
+
+    # Asserted on id, not title: Tier 1 overwrites title with the canonical
+    # headline, so the seeded name is gone by the time we look.
+    enriched = session.query(Story).filter(Story.status == StoryStatus.ENRICHED).all()
+    assert [s.id for s in enriched] == [ids["newest"]]

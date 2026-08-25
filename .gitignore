@@ -46,3 +46,6 @@ WhatsApp*
 # checkout nested inside this repo, never itself committed here.
 /.cache/
 debug/
+
+# Git Bash crash dumps, occasionally left behind on Windows
+*.stackdump

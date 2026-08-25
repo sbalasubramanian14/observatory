@@ -25,6 +25,12 @@ export function Header() {
           Feed
         </Link>
         <Link
+          href="/top/"
+          className={`${styles.navLink} ${pathname?.startsWith("/top") ? styles.navLinkActive : ""}`}
+        >
+          Top 50
+        </Link>
+        <Link
           href="/sources/"
           className={`${styles.navLink} ${pathname?.startsWith("/sources") ? styles.navLinkActive : ""}`}
         >

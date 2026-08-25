@@ -209,6 +209,21 @@ class Story(Base):
     # "mistral:mistral-medium-latest".
     summary_provider: Mapped[str | None] = mapped_column(String(128))
     analyzed_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+    # Top 50 (feed/stages/rank.py). Importance as JUDGED, distinct from
+    # `score`, which is arithmetic (authority + velocity + novelty) and
+    # cannot tell a frontier release from a well-syndicated funding round.
+    # NULL means "not in the current Top N" -- rank() rewrites these
+    # wholesale each run so the list rotates rather than accumulating,
+    # which is why an index on importance_rank is worth having: the
+    # publish stage and the /top page both filter on IS NOT NULL.
+    importance_rank: Mapped[int | None] = mapped_column(Integer, index=True)
+    importance_band: Mapped[str | None] = mapped_column(String(16))
+    importance_reason: Mapped[str | None] = mapped_column(Text)
+    ranked_at: Mapped[datetime | None] = mapped_column(UtcDateTime)
+    # Same provenance requirement as analysis_provider/summary_provider:
+    # "<provider>:<model>", so a bad batch of judgements can be found and
+    # re-done.
+    ranked_by: Mapped[str | None] = mapped_column(String(128))
     status: Mapped[StoryStatus] = mapped_column(
         Enum(StoryStatus), default=StoryStatus.NEW, index=True
     )

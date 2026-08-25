@@ -78,6 +78,13 @@ class FeedPageStory(_Strict):
     # without fetching every story's full detail file just to filter the
     # main list. Never empty for a story that made it through cluster().
     source_ids: list[str]
+    # Top 50 -- importance as JUDGED by the DEEP provider, as opposed to
+    # the arithmetic `score` above (feed/stages/rank.py explains why the
+    # two disagree). All three are null together for a story outside the
+    # current Top N, which is nearly all of them.
+    importance_rank: int | None = None
+    importance_band: str | None = None
+    importance_reason: str | None = None
 
 
 class FeedPage(_Strict):

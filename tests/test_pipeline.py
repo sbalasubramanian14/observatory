@@ -20,6 +20,7 @@ def _ok_feed_command(python, config, args, *, cwd, timeout):
         "sources": "sources sync: added=0 updated=1 unchanged=5 disabled=0 deleted=0",
         "run": "collect:   new=3 dupes=1 source_errors=0\nscore:     ok=3 failed=0 rounds=1",
         "enrich": "tier1: ok=2 failed=0\ntier2: ok=1 failed=0 degraded=0",
+        "rank": "rank:      ranked=50 rejected=0 cleared=3 window=2d by=claude-code:claude-code",
         "publish": "published 5 stories across 1 page(s) to public (pruned 0 stale file(s))",
     }
     return _cp(args, 0, stdouts.get(stage, ""), "")
@@ -69,7 +70,7 @@ def test_happy_path_runs_every_stage_and_pushes(tmp_path, monkeypatch):
 
     assert result.exit_code == EXIT_OK
     assert [s.name for s in result.stages] == [
-        "sources sync", "run (collect->score)", "enrich", "publish",
+        "sources sync", "run (collect->score)", "enrich", "rank", "publish",
     ]
     assert all(s.ok for s in result.stages)
     assert result.almanac_ok is True
@@ -349,20 +350,23 @@ def test_mirror_dir_adds_updates_and_removes_stale_files(tmp_path):
     assert not (dst / "stale_dir").exists()  # emptied AND pruned
 
 
-def test_days_is_forwarded_to_the_publish_stage_only():
-    """`observatory.bat 7` reaches the publish subprocess as `--days 7`.
-    The pipeline runs each stage as its own `feed <stage>` process, so a
-    window override only takes effect if it is threaded onto the publish
-    argv -- and it must not leak onto the collect/enrich stages, whose
-    own backfill horizon is a separate setting (collect.max_backfill_days).
+def test_days_is_forwarded_to_the_window_aware_stages_only():
+    """`observatory.bat 7` reaches the subprocesses as `--days 7`.
+
+    Exactly two stages are window-aware: publish (what the bundle carries)
+    and rank (the top of that same set -- a different window there would
+    put stories on the Top 50 page that are not in the feed). It must NOT
+    leak onto collect or enrich, whose reach is governed by the separate
+    [collect].max_backfill_days.
     """
     from feed.pipeline import _stage_specs
 
     specs = {s.name: s.args for s in _stage_specs(catalogue=None, out_dir=None, days=7)}
 
     assert specs["publish"] == ["publish", "--days", "7"]
+    assert specs["rank"] == ["rank", "--days", "7"]
     for name, args in specs.items():
-        if name != "publish":
+        if name not in ("publish", "rank"):
             assert "--days" not in args
 
 
@@ -372,3 +376,36 @@ def test_days_omitted_leaves_the_publish_stage_argv_untouched():
     specs = {s.name: s.args for s in _stage_specs(catalogue=None, out_dir=None, days=None)}
 
     assert specs["publish"] == ["publish"]
+
+
+def test_rank_runs_between_enrich_and_publish():
+    """Order is load-bearing: rank reads the Tier 1 summaries enrich
+    produces, and publish copies rank's verdict onto the feed rows. Wired
+    anywhere else, the Top 50 would be judged from bare headlines or would
+    reach the bundle a full run late."""
+    from feed.pipeline import _stage_specs
+
+    names = [s.name for s in _stage_specs(catalogue=None, out_dir=None)]
+
+    assert names.index("enrich") < names.index("rank") < names.index("publish")
+
+
+def test_rank_failure_does_not_stop_the_site_updating():
+    """Claude Code is a local CLI with no SLA. Losing today's Top 50 is a
+    degraded feed; losing the whole publish is a dead one."""
+    from feed.pipeline import _stage_specs
+
+    spec = next(s for s in _stage_specs(catalogue=None, out_dir=None) if s.name == "rank")
+
+    assert spec.fatal_if_failed is False
+
+
+def test_rank_receives_the_same_window_as_publish():
+    """Top 50 means the top of what a reader can actually see. If rank used
+    a different window it could rank a story out of the published bundle."""
+    from feed.pipeline import _stage_specs
+
+    spec = next(s for s in _stage_specs(catalogue=None, out_dir=None, days=7)
+                if s.name == "rank")
+
+    assert spec.args == ["rank", "--days", "7"]
