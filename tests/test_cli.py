@@ -552,3 +552,92 @@ def test_enrich_stores_provenance_via_the_real_failover_chain(tmp_path, monkeypa
         from feed.models import Story
         story = s.query(Story).first()
         assert story.summary_provider == "gemini:gemini-flash-latest"
+
+
+def _seed_story_aged(cfg_path, *, days_old: float, title: str, score: float = 0.5):
+    """Seed one scored story whose updated_at is `days_old` days in the
+    past, so retention-window tests can assert which side of a cutoff a
+    story lands on."""
+    from datetime import datetime, timedelta, timezone
+    from feed.config import load_config
+    from feed.db import create_all, make_engine, make_session_factory
+    from feed.models import Item, Source, Story
+
+    cfg = load_config(cfg_path)
+    engine = make_engine(cfg.database.url)
+    create_all(engine)
+    factory = make_session_factory(engine)
+    with factory() as s:
+        when = datetime.now(timezone.utc) - timedelta(days=days_old)
+        if s.get(Source, "src") is None:
+            s.add(Source(id="src", plugin="rss", config={}, cadence_minutes=30))
+            s.flush()
+        story = Story(title=title, first_seen=when, updated_at=when, item_count=1,
+                      outlet_count=1, score=score)
+        s.add(story)
+        s.flush()
+        s.add(Item(source_id="src", url=f"http://x/{story.id}", url_hash=f"h{story.id}",
+                   title=title, story_id=story.id, published_at=when))
+        s.commit()
+        return story.id
+
+
+def _published_titles(out_dir: Path) -> set[str]:
+    manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+    titles: set[str] = set()
+    for page in manifest["pages"]:
+        payload = json.loads((out_dir / page["path"]).read_text(encoding="utf-8"))
+        titles.update(s["title"] for s in payload["stories"])
+    return titles
+
+
+def test_publish_days_flag_narrows_the_retention_window(tmp_path):
+    """`feed publish --days N` is the per-run override behind
+    `observatory.bat N` -- it must beat [publish].retention_days in the
+    config file, not merely default to it."""
+    cfg = tmp_path / "feed.toml"
+    cfg.write_text(
+        f'[database]\nurl = "sqlite:///{(tmp_path / "t.db").as_posix()}"\n'
+        "[publish]\nretention_days = 90\n",
+        encoding="utf-8",
+    )
+    main(["--config", str(cfg), "init"])
+    _seed_story_aged(cfg, days_old=1, title="Yesterday")
+    _seed_story_aged(cfg, days_old=10, title="Ten days ago")
+    out_dir = tmp_path / "bundle"
+
+    rc = main(["--config", str(cfg), "publish", "--days", "5", "--out", str(out_dir)])
+
+    assert rc == 0
+    assert _published_titles(out_dir) == {"Yesterday"}
+
+
+def test_publish_without_days_flag_uses_the_configured_window(tmp_path):
+    """The override must be opt-in: no --days means the config file's
+    retention_days still decides, so a scheduled run is unaffected."""
+    cfg = tmp_path / "feed.toml"
+    cfg.write_text(
+        f'[database]\nurl = "sqlite:///{(tmp_path / "t.db").as_posix()}"\n'
+        "[publish]\nretention_days = 90\n",
+        encoding="utf-8",
+    )
+    main(["--config", str(cfg), "init"])
+    _seed_story_aged(cfg, days_old=1, title="Yesterday")
+    _seed_story_aged(cfg, days_old=10, title="Ten days ago")
+    out_dir = tmp_path / "bundle"
+
+    rc = main(["--config", str(cfg), "publish", "--out", str(out_dir)])
+
+    assert rc == 0
+    assert _published_titles(out_dir) == {"Yesterday", "Ten days ago"}
+
+
+def test_publish_days_flag_rejects_zero_and_negative_values(tmp_path, capsys):
+    """A window of 0 days would publish an empty bundle and prune every
+    story file -- argparse must refuse it before it reaches the DB."""
+    cfg = _cfg(tmp_path)
+    main(["--config", str(cfg), "init"])
+
+    for bad in ("0", "-3"):
+        with pytest.raises(SystemExit):
+            main(["--config", str(cfg), "publish", "--days", bad])

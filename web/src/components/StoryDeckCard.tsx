@@ -41,7 +41,8 @@ export function StoryDeckCard({
 
   function handleSave() {
     if (saved) return;
-    markSaved(story.id);
+    // See StoryCard.handleSave — the snapshot is what outlives the window.
+    markSaved(story.id, story);
     setSaved(true);
     if (embedding) recordSignal("save", embedding, embeddingModelId);
     onSignal?.();

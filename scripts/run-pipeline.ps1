@@ -29,6 +29,18 @@
 .PARAMETER Config
     Path to an alternate feed.toml (default: the repo's own).
 
+.PARAMETER Days
+    Publish only the last N days of news, overriding [publish].retention_days
+    in feed.toml for THIS RUN ONLY -- the config file is never rewritten, so
+    the next plain run returns to the configured window. Nothing is lost by
+    narrowing it: the database keeps every story regardless, and re-running
+    with a larger number (or none) brings the older ones straight back.
+
+.PARAMETER DryRun
+    Resolve everything and print the command that WOULD run, then exit 0
+    without touching the database, the LLM providers, or the almanac repo.
+    Useful for confirming an argument landed the way you meant it to.
+
 .PARAMETER Scheduled
     Set by scripts\register-schedule.ps1's registered task. Suppresses
     the "press any key" pause at the end -- Task Scheduler has no console
@@ -41,6 +53,8 @@
     scripts\run-pipeline.ps1
     scripts\run-pipeline.ps1 -SkipAlmanacPush
     scripts\run-pipeline.ps1 -Scheduled -KeepLogs 60
+    scripts\run-pipeline.ps1 -Days 7
+    scripts\run-pipeline.ps1 -Days 7 -DryRun
 #>
 [CmdletBinding()]
 param(
@@ -48,6 +62,11 @@ param(
     [int]$KeepLogs = 30,
     [double]$StageTimeout = 3600,
     [string]$Config,
+    # 0 means "not supplied" -- fall through to feed.toml's retention_days.
+    # Validated below rather than with [ValidateRange], which would reject
+    # this sentinel default before the script ever starts.
+    [int]$Days = 0,
+    [switch]$DryRun,
     [switch]$Scheduled
 )
 
@@ -81,15 +100,44 @@ if (-not (Test-Path $FeedToml)) {
     exit 99
 }
 
+if ($Days -lt 0) {
+    Write-Host ""
+    Write-Host "ERROR: -Days must be 1 or more (got $Days)" -ForegroundColor Red
+    if (-not $Scheduled) { Read-Host "Press Enter to close" | Out-Null }
+    exit 99
+}
+
+# Built here rather than inside the try below so -DryRun can report it and
+# leave without entering the invocation block at all.
+$pyArgs = @("-m", "feed", "--config", $FeedToml, "pipeline",
+           "--keep-logs", $KeepLogs, "--stage-timeout", $StageTimeout)
+if ($SkipAlmanacPush) { $pyArgs += "--skip-almanac-push" }
+if ($Days -gt 0) { $pyArgs += @("--days", $Days) }
+
+Write-Host "python    : $PythonExe"
+if ($Days -gt 0) {
+    Write-Host "window    : last $Days day(s) of news -- overrides feed.toml for this run only"
+} else {
+    Write-Host "window    : from feed.toml ([publish].retention_days)"
+}
+
+# Printed as a single resolved line so a caller -- including
+# tests/test_runner_scripts.py -- can assert on exactly what would reach
+# python, rather than on the source text of this script. An argument
+# silently dropped somewhere between cmd.exe, PowerShell's parameter
+# binder and python's argv is the failure worth guarding against, and only
+# the resolved argv can reveal it.
+if ($DryRun) {
+    Write-Host ""
+    Write-Host "would run : $PythonExe $($pyArgs -join ' ')" -ForegroundColor Cyan
+    Write-Host "DRY RUN -- nothing was executed." -ForegroundColor Yellow
+    exit 0
+}
+
+Write-Host ""
+
 Push-Location $RepoRoot
 try {
-    $pyArgs = @("-m", "feed", "--config", $FeedToml, "pipeline",
-               "--keep-logs", $KeepLogs, "--stage-timeout", $StageTimeout)
-    if ($SkipAlmanacPush) { $pyArgs += "--skip-almanac-push" }
-
-    Write-Host "python    : $PythonExe"
-    Write-Host ""
-
     & $PythonExe @pyArgs
     $exitCode = $LASTEXITCODE
 }

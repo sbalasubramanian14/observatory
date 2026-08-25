@@ -88,6 +88,16 @@ is deployed once and fetches it at runtime, so **new data needs no redeploy**. I
 makes the service worker's caching trivially correct: cache hashed files forever,
 revalidate only the manifest.
 
+The bundle carries a **rolling 5-day window** of news, so the feed stays about what is
+happening rather than what has happened. That number is `[publish].retention_days`, and
+`observatory.bat 7` overrides it for a single run. Narrowing it destroys nothing: the
+database keeps every story regardless, so widening the window and re-publishing brings
+the older ones straight back.
+
+Because the window means saved stories eventually leave the bundle, saving keeps its own
+copy of the card on the device — otherwise the bookmark button would be a promise the app
+could not keep past the end of the week.
+
 Article text is never published. Only titles, canonical links, metadata and
 Observatory's own generated summaries — republishing publishers' article bodies would be
 copyright redistribution, and that exclusion is enforced in code and tested.
@@ -117,7 +127,13 @@ py -3.14 -m venv .venv
 .venv/Scripts/python.exe -m feed publish --out public
 ```
 
-Or `observatory.bat` for the whole chain including publishing.
+Or `observatory.bat` for the whole chain including publishing:
+
+```
+observatory.bat            full run; window from feed.toml
+observatory.bat 7          full run; publish only the last 7 days
+observatory.bat 7 dryrun   print the command it would run, and stop
+```
 
 Provider keys go in a gitignored `.env` (`GROQ_API_KEY`, `MISTRAL_API_KEY`,
 `OPENROUTER_API_KEY`, `GEMINI_API_KEY`). All have usable free tiers.

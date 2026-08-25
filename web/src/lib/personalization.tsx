@@ -17,6 +17,7 @@ const KEYS = {
   embeddingModelId: `${NS}embeddingModelId`,
   read: `${NS}read`,
   saved: `${NS}saved`,
+  savedSnapshots: `${NS}saved:snapshots`,
   dismissed: `${NS}dismissed`,
 } as const;
 
@@ -183,12 +184,72 @@ export function getDismissedIdsOrdered(): number[] {
   return readIdListOrdered(KEYS.dismissed);
 }
 
-export function markSaved(id: number) {
+// ---- saved-story snapshots --------------------------------------------
+//
+// The bundle only carries a rolling window of recent news ([publish]
+// .retention_days, currently 5 days). A saved story that ages out of that
+// window disappears from the feed pages, and /saved — which resolves ids
+// against those pages — would render it as a "no longer in the bundle"
+// placeholder. That makes the bookmark button a promise the app cannot
+// keep, at any window size; narrowing the window to 5 days just makes it
+// happen within the week rather than within the quarter.
+//
+// So saving keeps its own copy of the card. It is the same FeedStoryRow
+// the bundle published — titles, links and Observatory's own generated
+// summary, never article text (spec §4.2) — and it stays on the device
+// exactly like every other signal here.
+
+type SavedSnapshots = Record<string, FeedStoryRow>;
+
+function readSnapshots(): SavedSnapshots {
+  return readJson<SavedSnapshots>(KEYS.savedSnapshots, {});
+}
+
+/** The saved card as it was when it was saved, for stories the current
+ * bundle no longer carries. Returns null when there is no snapshot —
+ * bookmarks made before this existed have none, and must still degrade to
+ * the placeholder row rather than crash. */
+export function getSavedSnapshot(id: number): FeedStoryRow | null {
+  return readSnapshots()[String(id)] ?? null;
+}
+
+/** Re-capture snapshots for saved stories the bundle still carries, so a
+ * story saved before enrichment ran (title only, "No summary yet") is not
+ * frozen that way forever. One write per /saved visit, and only when
+ * something actually changed. */
+export function refreshSavedSnapshots(rows: readonly FeedStoryRow[]) {
+  const saved = getSavedIds();
+  if (saved.size === 0) return;
+  const snapshots = readSnapshots();
+  let changed = false;
+  for (const row of rows) {
+    if (!saved.has(row.id)) continue;
+    const key = String(row.id);
+    if (JSON.stringify(snapshots[key]) === JSON.stringify(row)) continue;
+    snapshots[key] = row;
+    changed = true;
+  }
+  if (changed) writeJson(KEYS.savedSnapshots, snapshots);
+}
+
+export function markSaved(id: number, snapshot?: FeedStoryRow) {
   addToIdSet(KEYS.saved, id);
+  if (snapshot) {
+    const snapshots = readSnapshots();
+    snapshots[String(id)] = snapshot;
+    writeJson(KEYS.savedSnapshots, snapshots);
+  }
 }
 
 export function unmarkSaved(id: number) {
   removeFromIdSet(KEYS.saved, id);
+  // Unsaving drops the copy too: keeping it would grow localStorage
+  // without bound for a story the reader has explicitly let go of.
+  const snapshots = readSnapshots();
+  if (String(id) in snapshots) {
+    delete snapshots[String(id)];
+    writeJson(KEYS.savedSnapshots, snapshots);
+  }
 }
 
 export function markDismissed(id: number) {

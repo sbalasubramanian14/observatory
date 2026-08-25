@@ -140,5 +140,14 @@ timeout = 30.0
 # Spec 4.1/4.4: the static bundle the Publish stage writes.
 [publish]
 out_dir = "public"
-retention_days = 90
+# How many days of NEWS the bundle carries. Story.updated_at derives from
+# item.published_at (feed/stages/cluster.py), so this is the age of the
+# event, not of the crawl. Overridable per-run without editing this file:
+# `observatory.bat 7`, or `feed publish --days 7`.
+#
+# Nothing is destroyed by narrowing it -- the database keeps every story
+# regardless, so raising this number and re-publishing brings the older
+# ones straight back. Comfortably wider than [collect].max_backfill_days
+# above, so consecutive daily runs keep the window full.
+retention_days = 5
 page_size = 50

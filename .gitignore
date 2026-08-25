@@ -5,6 +5,10 @@ venv/
 node_modules/
 .env
 *.db
+# SQLite WAL sidecars -- present whenever a run is in flight (or was
+# interrupted); they are not separate databases and must never be committed.
+*.db-wal
+*.db-shm
 *.sqlite3
 .next/
 dist/

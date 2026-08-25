@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 import feed.sources  # noqa: F401  (registers plugins)
 from feed.catalogue import DEFAULT_CATALOGUE_PATH, load_catalogue
 from feed.clustering.adjudicate import NullAdjudicator, ThresholdAdjudicator
-from feed.config import BulkProviderConfig, Config, load_config
+from feed.config import BulkProviderConfig, Config, PublishConfig, load_config
 from feed.db import create_all, make_engine, make_session_factory
 from feed.embedding import build_embedder
 from feed.embedding.resolve import resolve
@@ -333,16 +333,48 @@ def cmd_providers(args, cfg: Config) -> int:
     return 0
 
 
+def _positive_days(value: str) -> int:
+    """argparse type for --days. A window of 0 (or a negative) would select
+    no stories at all, and because publish() prunes every content-addressed
+    file it did not write this run, that empties the bundle AND deletes the
+    story files behind it. Refuse it at the parser rather than discovering
+    it after the almanac push."""
+    try:
+        days = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a whole number of days")
+    if days < 1:
+        raise argparse.ArgumentTypeError(
+            f"--days must be at least 1, got {days} (0 would publish an empty bundle)"
+        )
+    return days
+
+
+def _publish_config(cfg: Config, days: int | None) -> PublishConfig:
+    """`--days N` is a per-RUN override of [publish].retention_days -- it is
+    deliberately not written back to feed.toml, so `observatory.bat 2` is a
+    one-off look at the last two days and the next plain run returns to the
+    configured window. Re-validated rather than model_copy'd so
+    PublishConfig's own gt=0 constraint still applies even if a future
+    caller bypasses _positive_days.
+    """
+    if days is None:
+        return cfg.publish
+    return PublishConfig.model_validate({**cfg.publish.model_dump(), "retention_days": days})
+
+
 def cmd_publish(args, cfg: Config) -> int:
     _, factory = _session(cfg)
     out_dir = args.out or cfg.publish.out_dir
+    pub_cfg = _publish_config(cfg, getattr(args, "days", None))
     with factory() as s:
-        pr = publish(s, cfg.publish, out_dir)
+        pr = publish(s, pub_cfg, out_dir)
     if not pr.published:
         print(f"publish failed: {pr.error}", file=sys.stderr)
         return 1
     print(f"published {pr.story_count} stories across {pr.page_count} page(s) "
-          f"to {pr.out_dir} (pruned {pr.pruned} stale file(s))")
+          f"to {pr.out_dir} (last {pub_cfg.retention_days} days, "
+          f"pruned {pr.pruned} stale file(s))")
     return 0
 
 
@@ -358,6 +390,7 @@ def cmd_pipeline(args, cfg: Config) -> int:
         cwd=Path.cwd(),
         catalogue=args.catalogue,
         out_dir=args.out,
+        days=args.days,
         logs_dir=args.logs_dir,
         keep_logs=args.keep_logs,
         almanac_dir=args.almanac_dir,
@@ -525,6 +558,9 @@ def build_parser() -> argparse.ArgumentParser:
     publish_p = sub.add_parser("publish")
     publish_p.add_argument("--out", type=Path, default=None,
                            help="bundle output directory (default: [publish].out_dir)")
+    publish_p.add_argument("--days", type=_positive_days, default=None,
+                           help="publish only the last N days of news, overriding "
+                                "[publish].retention_days for this run only")
     publish_p.set_defaults(func=cmd_publish)
 
     pipeline_p = sub.add_parser(
@@ -535,6 +571,10 @@ def build_parser() -> argparse.ArgumentParser:
                             help="path to the source catalogue TOML (default: sources.catalogue.toml)")
     pipeline_p.add_argument("--out", type=Path, default=None,
                             help="bundle output directory (default: [publish].out_dir)")
+    pipeline_p.add_argument("--days", type=_positive_days, default=None,
+                            help="publish only the last N days of news, overriding "
+                                 "[publish].retention_days for this run only "
+                                 "(this is what `observatory.bat N` sets)")
     pipeline_p.add_argument("--logs-dir", type=Path, default=None,
                             help="directory for timestamped run logs (default: ./logs)")
     pipeline_p.add_argument("--keep-logs", type=int, default=DEFAULT_KEEP_LOGS,

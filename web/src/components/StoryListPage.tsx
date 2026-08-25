@@ -19,6 +19,8 @@ export function StoryListPage({
   emptyTitle,
   emptyBody,
   secondaryLink,
+  getFallback,
+  onStoriesLoaded,
 }: {
   title: string;
   subtitle: string;
@@ -30,6 +32,14 @@ export function StoryListPage({
   emptyTitle: string;
   emptyBody: string;
   secondaryLink?: { href: string; label: string };
+  /** Where to look when the current bundle no longer carries a story.
+   * /saved supplies the on-device snapshot taken at save time; /dismissed
+   * supplies nothing, because a dismissed story that has aged out needs
+   * no rendering — letting it go is the outcome the reader asked for. */
+  getFallback?: (id: number) => FeedStoryRow | null;
+  /** Called once with everything the bundle currently carries, so /saved
+   * can refresh its snapshots against the live data. */
+  onStoriesLoaded?: (rows: FeedStoryRow[]) => void;
 }) {
   const [stories, setStories] = useState<FeedStoryRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +66,17 @@ export function StoryListPage({
       cancelled = true;
     };
   }, []);
+
+  // Deliberately a separate effect keyed on `stories` rather than a call
+  // inside the fetch above: that one owns an empty dependency array (fetch
+  // once per mount) and reaching a callback prop from inside it would mean
+  // either a stale closure or a ref written during render. `stories` goes
+  // null -> array exactly once, so this fires once too — and
+  // refreshSavedSnapshots is idempotent, so an extra call from a caller
+  // passing an unstable callback costs nothing.
+  useEffect(() => {
+    if (stories) onStoriesLoaded?.(stories);
+  }, [stories, onStoriesLoaded]);
 
   function handleRemove(id: number) {
     removeId(id);
@@ -90,7 +111,7 @@ export function StoryListPage({
       {stories && ids.length > 0 && (
         <div className={styles.list}>
           {ids.map((id) => {
-            const story = byId.get(id);
+            const story = byId.get(id) ?? getFallback?.(id) ?? null;
             return story ? (
               <StoryListRow
                 key={id}

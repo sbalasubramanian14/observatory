@@ -59,7 +59,9 @@ export function StoryCard({
   }
 
   function handleSave() {
-    markSaved(story.id);
+    // Pass the row itself: /saved must still be able to render this card
+    // after the story ages out of the bundle's rolling window.
+    markSaved(story.id, story);
     setSaved(true);
     if (embedding) recordSignal("save", embedding, embeddingModelId);
     onSignal?.();

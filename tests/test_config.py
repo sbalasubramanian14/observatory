@@ -182,3 +182,14 @@ def test_publish_file_overrides_defaults(tmp_path):
     assert cfg.publish.out_dir == "bundle"
     assert cfg.publish.retention_days == 30
     assert cfg.publish.page_size == 10
+
+
+def test_shipped_feed_toml_publishes_a_five_day_window():
+    """The owner's decision (2026-08-25): the live feed shows the last 5
+    days of news, not 90. `retention_days` gates what the bundle CONTAINS,
+    and Story.updated_at derives from item.published_at (cluster.py), so
+    this is 5 days of news rather than 5 days of crawl history. The
+    PublishConfig code default stays at spec 4.4's 90 for anyone running
+    without a config file -- this asserts what THIS repo actually ships."""
+    cfg = load_config(Path("feed.toml"))
+    assert cfg.publish.retention_days == 5

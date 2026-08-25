@@ -347,3 +347,28 @@ def test_mirror_dir_adds_updates_and_removes_stale_files(tmp_path):
     assert (dst / "sub" / "nested.txt").read_text(encoding="utf-8") == "nested"
     assert not (dst / "stale.txt").exists()
     assert not (dst / "stale_dir").exists()  # emptied AND pruned
+
+
+def test_days_is_forwarded_to_the_publish_stage_only():
+    """`observatory.bat 7` reaches the publish subprocess as `--days 7`.
+    The pipeline runs each stage as its own `feed <stage>` process, so a
+    window override only takes effect if it is threaded onto the publish
+    argv -- and it must not leak onto the collect/enrich stages, whose
+    own backfill horizon is a separate setting (collect.max_backfill_days).
+    """
+    from feed.pipeline import _stage_specs
+
+    specs = {s.name: s.args for s in _stage_specs(catalogue=None, out_dir=None, days=7)}
+
+    assert specs["publish"] == ["publish", "--days", "7"]
+    for name, args in specs.items():
+        if name != "publish":
+            assert "--days" not in args
+
+
+def test_days_omitted_leaves_the_publish_stage_argv_untouched():
+    from feed.pipeline import _stage_specs
+
+    specs = {s.name: s.args for s in _stage_specs(catalogue=None, out_dir=None, days=None)}
+
+    assert specs["publish"] == ["publish"]

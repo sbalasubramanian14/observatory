@@ -143,13 +143,21 @@ class _StageSpec:
     fatal_if_failed: bool
 
 
-def _stage_specs(*, catalogue: Path | None, out_dir: Path | None) -> list[_StageSpec]:
+def _stage_specs(*, catalogue: Path | None, out_dir: Path | None,
+                 days: int | None = None) -> list[_StageSpec]:
     sync_args = ["sources", "sync"]
     if catalogue is not None:
         sync_args += ["--catalogue", str(catalogue)]
     publish_args = ["publish"]
     if out_dir is not None:
         publish_args += ["--out", str(out_dir)]
+    # `observatory.bat N` lands here. Only publish gets it: `days` narrows
+    # what the BUNDLE contains, which is a separate question from how far
+    # back collect() fetches ([collect].max_backfill_days). Widening the
+    # window later needs no re-collection -- every story is still in the
+    # db, only the published subset changed.
+    if days is not None:
+        publish_args += ["--days", str(days)]
     return [
         # Non-fatal (spec: source failures are normal, already visible on the
         # health page). A sync failure just means sources didn't change this
@@ -346,6 +354,7 @@ def run_pipeline(
     almanac_repo: str = DEFAULT_ALMANAC_REPO,
     skip_almanac_push: bool = False,
     stage_timeout: float = DEFAULT_STAGE_TIMEOUT,
+    days: int | None = None,
 ) -> PipelineResult:
     """Run the full one-click pipeline: sources sync -> run -> enrich ->
     publish -> push the bundle to the almanac repo. See PIPELINE-CLI.md for
@@ -385,7 +394,7 @@ def run_pipeline(
                          f"started {stale.started_at} -- that process is no longer running)")
 
         try:
-            specs = _stage_specs(catalogue=catalogue, out_dir=out_dir)
+            specs = _stage_specs(catalogue=catalogue, out_dir=out_dir, days=days)
             degraded = False
             publish_ok = False
             for i, spec in enumerate(specs, start=1):
