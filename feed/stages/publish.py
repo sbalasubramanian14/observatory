@@ -213,9 +213,31 @@ def publish(session: Session, cfg: PublishConfig, out_dir: str | Path,
     cutoff = now - timedelta(days=cfg.retention_days)
     result = PublishResult(out_dir=out)
 
+    # A story whose members are ALL undated is held back. cluster() seeds a
+    # story with `item.published_at or now`, and that `or now` fabricates a
+    # date -- it asserts "this happened just now" about something whose
+    # date is merely unknown. Inside a rolling recent-news window the
+    # fabricated value is always within the cutoff, so such a story does
+    # not just get misdated, it is guaranteed to render as current.
+    # Measured live: Meta's research feed serves ten undated entries, and
+    # Segment Anything (April 2023) appeared in the feed as "2d ago".
+    #
+    # Deliberately NOT a fix in cluster(): undated items must still be able
+    # to cluster (see the C1 block in tests/test_cluster_stage.py -- "an
+    # item with no date is never penalised or excluded on time grounds").
+    # They stay in the database and keep merging; they are simply not
+    # published into a feed sorted and filtered by recency, because there
+    # is no honest place to put them. One dated member is enough to
+    # publish: that story has a real date to stand on.
+    has_dated_item = (
+        select(Item.story_id)
+        .where(Item.published_at.is_not(None), Item.story_id.is_not(None))
+        .distinct()
+    )
     stories = list(session.scalars(
         select(Story)
-        .where(Story.score.is_not(None), Story.updated_at >= cutoff)
+        .where(Story.score.is_not(None), Story.updated_at >= cutoff,
+               Story.id.in_(has_dated_item))
         .order_by(Story.score.desc(), Story.id)
     ))
 

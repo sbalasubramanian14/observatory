@@ -414,3 +414,4 @@ def test_non_finite_embedding_does_not_stall_the_rest_of_the_batch(session):
     stages = {i.title: i.stage for i in session.query(Item).all()}
     assert stages["Corrupted embedding item"] is Stage.FAILED
     assert stages["A perfectly fine second item"] is Stage.CLUSTERED
+

@@ -343,3 +343,46 @@ def test_publish_emits_nulls_for_stories_outside_the_top50(session, tmp_path):
     assert row["importance_rank"] is None
     assert row["importance_band"] is None
     assert row["importance_reason"] is None
+
+
+def test_publish_excludes_a_story_whose_members_are_all_undated(session, tmp_path):
+    """An undated item is deliberately still clusterable (see the C1 block
+    in tests/test_cluster_stage.py: "an item with no date is never
+    penalised or excluded on time grounds"). But cluster() seeds a story
+    with `item.published_at or now`, and that `or now` is a fabrication --
+    it asserts "this happened just now" about something whose date is
+    simply unknown.
+
+    In a rolling recent-news window the fabricated date is ALWAYS inside
+    the window, so such a story is not merely misdated, it is guaranteed to
+    appear as current. Measured live: Meta's research feed serves ten
+    undated entries, and Segment Anything (April 2023) rendered in the feed
+    as "2d ago".
+
+    The story stays in the database and keeps clustering; it just does not
+    get published into a feed that is sorted and filtered by recency, since
+    there is no honest place to put it.
+    """
+    story = _seed_story(session, score=0.9)
+    for item in story.items:
+        item.published_at = None
+    session.commit()
+
+    result = publish(session, PublishConfig(), tmp_path)
+
+    assert result.story_count == 0
+    assert _feed_page(tmp_path)["stories"] == []
+
+
+def test_publish_keeps_a_story_that_has_at_least_one_dated_member(session, tmp_path):
+    """Only ALL-undated stories are held back. A cluster that merged an
+    undated item into a properly dated one has a real date to stand on, and
+    dropping it would lose genuine coverage."""
+    story = _seed_story(session, score=0.9)
+    items = list(story.items)
+    items[0].published_at = None          # one undated member
+    session.commit()
+
+    result = publish(session, PublishConfig(), tmp_path)
+
+    assert result.story_count == 1

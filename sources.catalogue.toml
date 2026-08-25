@@ -176,12 +176,22 @@ cadence_minutes = 120
 authority = 0.7
 config = { url = "https://blog.google/technology/ai/rss/" }
 
+# DISABLED, and this one is worth explaining because it was actively
+# harmful rather than merely useless. research.facebook.com/feed/ returns
+# 200 and parses, but every entry it serves is (a) from 2023 or earlier and
+# (b) carries NO date at all. Undated items get stamped with the clustering
+# time, so Segment Anything (April 2023) and Buck2 appeared in the live
+# feed as "2d ago". A silent source costs you coverage; this one was
+# publishing falsehoods. ai.meta.com/blog has no feed (both /rss/ and
+# /feed/ 404), so there is nothing to repoint at -- re-enable only with a
+# scraper that extracts real dates.
 [[source]]
 id = "meta_research"
 plugin = "rss"
 territory = "research"
 cadence_minutes = 180
 authority = 0.85
+enabled = false
 config = { url = "https://research.facebook.com/feed/" }
 
 [[source]]
@@ -208,13 +218,19 @@ cadence_minutes = 180
 authority = 0.75
 config = { url = "https://allenai.org/rss.xml" }
 
+# research.nvidia.com/rss.xml still returns 200 and still parses -- and its
+# newest entry is from June 2021. A feed can be perfectly healthy and five
+# years dead, which no error counter will ever notice. Repointed at the
+# deep-learning category of the main NVIDIA blog: live, correctly dated,
+# and narrower than nvidia_newsroom (corporate PR) or nvidia_devblog
+# (tooling how-tos), so it earns its place alongside them.
 [[source]]
 id = "nvidia_research"
 plugin = "rss"
 territory = "research"
 cadence_minutes = 180
 authority = 0.75
-config = { url = "https://research.nvidia.com/rss.xml" }
+config = { url = "https://blogs.nvidia.com/blog/category/deep-learning/feed/" }
 
 # Cohere and Stability AI: no working RSS feed found after multiple
 # guesses (cohere.com/{blog,news}/rss.xml, /feed, txt.cohere.com/rss/,
@@ -268,6 +284,12 @@ plugin = "rss"
 territory = "policy"
 cadence_minutes = 240
 authority = 0.85
+# Not broken -- dormant. The feed is live and correctly dated; AISI simply
+# stopped posting to gov.uk in October 2025 after moving to aisi.gov.uk,
+# which publishes no feed (both /rss.xml and /feed 404) and renders its
+# blog client-side with no <time> elements to scrape. Left enabled: it
+# costs one request every four hours and will catch anything posted back
+# to gov.uk.
 config = { url = "https://www.gov.uk/government/organisations/ai-safety-institute.atom" }
 
 [[source]]
