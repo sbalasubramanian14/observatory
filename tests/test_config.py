@@ -184,12 +184,23 @@ def test_publish_file_overrides_defaults(tmp_path):
     assert cfg.publish.page_size == 10
 
 
-def test_shipped_feed_toml_publishes_a_five_day_window():
-    """The owner's decision (2026-08-25): the live feed shows the last 5
-    days of news, not 90. `retention_days` gates what the bundle CONTAINS,
-    and Story.updated_at derives from item.published_at (cluster.py), so
-    this is 5 days of news rather than 5 days of crawl history. The
+def test_shipped_feed_toml_publishes_a_two_day_window():
+    """The owner's decision (2026-08-25): the live feed shows the last 2
+    days of news. `retention_days` gates what the bundle CONTAINS, and
+    Story.updated_at derives from item.published_at (cluster.py), so this
+    is 2 days of news rather than 2 days of crawl history. The
     PublishConfig code default stays at spec 4.4's 90 for anyone running
-    without a config file -- this asserts what THIS repo actually ships."""
+    without a config file -- this asserts what THIS repo actually ships,
+    and is what `observatory.bat` with no argument produces."""
     cfg = load_config(Path("feed.toml"))
-    assert cfg.publish.retention_days == 5
+    assert cfg.publish.retention_days == 2
+
+
+def test_shipped_collect_cap_is_narrower_than_the_publish_window():
+    """These two windows are independent and easy to confuse. The feed
+    window (retention_days) decides what a reader sees; the collect cap
+    (max_backfill_days) decides how far back a fetch reaches. Collect must
+    not reach LESS far than the feed shows, or a source polled once a day
+    could leave holes inside the published window."""
+    cfg = load_config(Path("feed.toml"))
+    assert cfg.collect.max_backfill_days <= cfg.publish.retention_days
