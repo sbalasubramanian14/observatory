@@ -115,6 +115,27 @@ enabled = true
 timeout = 30.0
 
 [[providers.bulk]]
+name = "minimax"
+kind = "openai_compatible"
+model = "MiniMax-M2"
+base_url = "https://api.minimax.io/v1"
+env_var = "MINIMAX_API_KEY"
+# Live-tested 2026-08-29 (measured, not from documentation): 200 OK on
+# POST https://api.minimax.io/v1/chat/completions -- the OpenAI-compatible
+# path OpenAICompatibleProvider builds, not MiniMax's own
+# /v1/text/chatcompletion_v2, which also works but is not the wire format
+# this class speaks. Placed above gemini because gemini is the measured-
+# flaky rung (503 on 3 of 4 attempts) and belongs last among the enabled.
+#
+# MiniMax-M2 is a reasoning model and emits visible <think>...</think> in
+# `content` even unasked -- exactly the leakage feed.providers.reasoning.
+# strip_reasoning already removes unconditionally, so no special-casing is
+# needed here. It does mean a low max_tokens returns empty content (the
+# budget goes to reasoning first), so leave the timeout generous.
+enabled = true
+timeout = 60.0
+
+[[providers.bulk]]
 name = "gemini"
 kind = "gemini"
 # gemini-flash-latest is used deliberately over a pinned version (e.g.

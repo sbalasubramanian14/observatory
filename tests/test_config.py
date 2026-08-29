@@ -153,16 +153,23 @@ def test_shipped_feed_toml_configures_the_expected_bulk_chain():
     cfg = load_config(Path("feed.toml"))
 
     names = [e.name for e in cfg.providers.bulk]
-    assert names == ["groq", "mistral", "openrouter", "gemini", "cerebras"]
+    assert names == ["groq", "mistral", "openrouter", "minimax", "gemini",
+                     "cerebras"]
 
     by_name = {e.name: e for e in cfg.providers.bulk}
     assert by_name["cerebras"].enabled is False
-    for name in ("groq", "mistral", "openrouter", "gemini"):
+    for name in ("groq", "mistral", "openrouter", "minimax", "gemini"):
         assert by_name[name].enabled is True
     assert by_name["gemini"].kind == "gemini"
-    for name in ("groq", "mistral", "openrouter", "cerebras"):
+    for name in ("groq", "mistral", "openrouter", "minimax", "cerebras"):
         assert by_name[name].kind == "openai_compatible"
         assert by_name[name].base_url is not None
+
+    # Gemini is the measured-flaky rung (503 on 3 of 4 attempts), so every
+    # other ENABLED provider must be tried before it -- adding a new one
+    # below gemini would silently make the flaky provider load-bearing.
+    enabled = [e.name for e in cfg.providers.bulk if e.enabled]
+    assert enabled[-1] == "gemini"
 
 
 def test_publish_defaults(tmp_path):

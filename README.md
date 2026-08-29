@@ -64,7 +64,7 @@ fragile to ship.
 | **2** | local Claude Code | ~20/day | what is genuinely new, why it matters |
 
 Tier 1 runs through a **priority-ordered failover chain** — Groq → Mistral → OpenRouter →
-Gemini. On a real run of 373 stories, Groq exhausted its daily quota after 56 and
+MiniMax → Gemini. On a real run of 373 stories, Groq exhausted its daily quota after 56 and
 auto-disabled; Mistral absorbed 316; **zero stories were lost.** Free tiers have no SLA,
 so the answer is several of them rather than a better one.
 
@@ -169,7 +169,7 @@ feed run                                   # push the new items through
 ```
 
 Provider keys go in a gitignored `.env` (`GROQ_API_KEY`, `MISTRAL_API_KEY`,
-`OPENROUTER_API_KEY`, `GEMINI_API_KEY`). All have usable free tiers.
+`OPENROUTER_API_KEY`, `MINIMAX_API_KEY`, `GEMINI_API_KEY`). All have usable free tiers.
 
 The web client is `web/` — Next.js static export, no server.
 
