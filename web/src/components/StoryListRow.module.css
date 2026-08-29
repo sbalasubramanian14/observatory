@@ -84,7 +84,15 @@
 @media (max-width: 639px) {
   .row {
     display: grid;
-    grid-template-columns: auto 1fr auto;
+    /* minmax(0, 1fr), not 1fr. A bare `1fr` carries an automatic minimum of
+     * its content's min-content width, and the middle column holds
+     * .metaTop -- whose ImportanceMeter is `flex: none` and therefore
+     * refuses to compress. Measured at a 390px viewport that pinned the
+     * middle column at 149.6px, so the tracks summed to 76 + 149.6 + 67.4
+     * plus 24px of gaps = 317px inside a 298px content box, and the row
+     * spilled 19px past the right edge of the screen. minmax(0, ...) drops
+     * that floor so the column yields; .metaTop wraps instead (below). */
+    grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
       "thumb meta action"
       "headline headline headline";
@@ -105,6 +113,9 @@
 
   .metaTop {
     grid-area: meta;
+    /* Category chip and gauge stack rather than force the track wider. */
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
   }
 
   .headline {
@@ -124,5 +135,11 @@
     grid-area: action;
     padding: var(--space-2) var(--space-3);
     font-size: var(--text-xs);
+    /* Belt and braces: even if a future label grows, the button gives way
+     * before the row does. */
+    max-width: 40vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }

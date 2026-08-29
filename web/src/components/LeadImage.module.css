@@ -37,8 +37,8 @@
   border: none;
 }
 
-@media (max-width: 560px) {
+@media (max-width: 640px) {
   .thumb {
-    width: 76px;
+    width: 56px;
   }
 }

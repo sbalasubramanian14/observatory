@@ -120,3 +120,50 @@
   color: var(--color-text-secondary);
   font-weight: 500;
 }
+
+/* --- sheet navigation ------------------------------------------------ */
+/* Sources moved out of the bar and into here. Styled as a destination row
+ * (icon, label, affordance) rather than as one of the toggles below it, so
+ * the sheet reads as "one place to go, then two things to set". */
+.sheetLink {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  margin: calc(var(--space-2) * -1) calc(var(--space-3) * -1);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  color: var(--color-text-primary);
+}
+
+.sheetLink:active {
+  background: var(--color-surface-sunken);
+}
+
+.sheetLink .icon {
+  width: 19px;
+  height: 19px;
+  color: var(--color-text-secondary);
+  flex: none;
+}
+
+.sheetLinkLabel {
+  flex: 1;
+  font-size: var(--text-md);
+  font-weight: 500;
+}
+
+.sheetLinkHint {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+.sheetDivider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 0 calc(var(--space-3) * -1);
+}

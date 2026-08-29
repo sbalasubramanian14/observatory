@@ -11,6 +11,12 @@
 // entirely. The route, its page, and its data were all fine; the
 // installed PWA (portrait, standalone) simply had no way to reach the
 // one view the ranking stage exists to produce.
+//
+// Sources lives in the "More" sheet rather than the bar. It is a
+// reference/diagnostics view, not somewhere you move between while
+// reading, and spending a fifth of a phone-width bar on it crowded the
+// three destinations that are. Nothing became unreachable -- the sheet is
+// one tap, and desktop still shows it in Header's top nav.
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -67,7 +73,19 @@ export function BottomNav() {
       {sheetOpen && (
         <>
           <div className={styles.sheetScrim} onClick={() => setSheetOpen(false)} />
-          <div className={styles.sheet} role="dialog" aria-label="Display settings">
+          <div className={styles.sheet} role="dialog" aria-label="More">
+            <Link
+              href="/sources/"
+              className={styles.sheetLink}
+              onClick={() => setSheetOpen(false)}
+            >
+              <SourcesIcon />
+              <span className={styles.sheetLinkLabel}>Sources</span>
+              <span className={styles.sheetLinkHint} aria-hidden="true">
+                {pathname?.startsWith("/sources") ? "Current" : "→"}
+              </span>
+            </Link>
+            <div className={styles.sheetDivider} />
             <div className={styles.sheetRow}>
               <span className={styles.sheetLabel}>Theme</span>
               <ThemeToggle />
@@ -99,15 +117,6 @@ export function BottomNav() {
           <span className={styles.itemLabel}>Top 50</span>
         </Link>
         <Link
-          href="/sources/"
-          className={`${styles.item} ${pathname?.startsWith("/sources") ? styles.itemActive : ""}`}
-          aria-label="Sources"
-          onClick={() => setSheetOpen(false)}
-        >
-          <SourcesIcon />
-          <span className={styles.itemLabel}>Sources</span>
-        </Link>
-        <Link
           href="/saved/"
           className={`${styles.item} ${pathname?.startsWith("/saved") ? styles.itemActive : ""}`}
           aria-label="Saved"
@@ -120,7 +129,7 @@ export function BottomNav() {
         <button
           type="button"
           className={`${styles.item} ${sheetOpen ? styles.itemActive : ""}`}
-          aria-label="Display settings"
+          aria-label="More"
           aria-expanded={sheetOpen}
           onClick={() => setSheetOpen((v) => !v)}
         >

@@ -56,7 +56,12 @@
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  /* min(300px, 100%), not a bare 300px: the raw floor cannot be honoured
+   * on a 320px screen, where the content box is only ~272px, so the track
+   * stayed 300px wide and the whole grid spilled 4px off-screen. min()
+   * lets the track fall back to the container width when 300px will not
+   * fit, which is the only case where the floor was doing harm. */
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
   gap: var(--space-4);
 }
 
