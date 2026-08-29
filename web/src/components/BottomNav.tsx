@@ -5,6 +5,12 @@
 // Header's top nav; this isn't a second copy of it, it's the mobile
 // wayfinding surface, so it carries the "More" sheet for theme/
 // personalization instead of duplicating Header's controls row.
+//
+// Top 50 is here because Header.module.css hides .nav below 768px, so
+// this bar was the ONLY nav on mobile -- and it used to omit /top
+// entirely. The route, its page, and its data were all fine; the
+// installed PWA (portrait, standalone) simply had no way to reach the
+// one view the ranking stage exists to produce.
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -17,6 +23,13 @@ function FeedIcon() {
   return (
     <svg className={styles.icon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M4 6h16M4 12h16M4 18h10" />
+    </svg>
+  );
+}
+function TopIcon() {
+  return (
+    <svg className={styles.icon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M5 20v-7M12 20V6M19 20v-9" />
     </svg>
   );
 }
@@ -75,6 +88,15 @@ export function BottomNav() {
         >
           <FeedIcon />
           <span className={styles.itemLabel}>Feed</span>
+        </Link>
+        <Link
+          href="/top/"
+          className={`${styles.item} ${pathname?.startsWith("/top") ? styles.itemActive : ""}`}
+          aria-label="Top 50"
+          onClick={() => setSheetOpen(false)}
+        >
+          <TopIcon />
+          <span className={styles.itemLabel}>Top 50</span>
         </Link>
         <Link
           href="/sources/"

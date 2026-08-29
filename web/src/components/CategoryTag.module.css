@@ -1,11 +1,16 @@
+/* Squared rather than a pill, and mono -- a category is a classification
+ * the pipeline assigned, so it belongs to the instrument layer. The pill
+ * shape is now reserved for things you can actually press. */
 .tag {
   display: inline-flex;
   align-items: center;
-  padding: 3px var(--space-2);
-  border-radius: var(--radius-pill);
-  font-size: var(--text-xs);
+  height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   white-space: nowrap;
 }

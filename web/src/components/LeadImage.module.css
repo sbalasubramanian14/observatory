@@ -21,10 +21,18 @@
 }
 
 /* Full-width image at the top of a StoryCard (Reference A: "large rounded
- * image" under the headline row). */
+ * image" under the headline row).
+ *
+ * max-height is the fix for a problem the aspect-ratio alone creates: on a
+ * wide viewport the card is ~710px, so 16/10 renders a ~440px-tall image
+ * and pushes the headline -- the thing that actually earns the click --
+ * below the fold. Capping the height lets the ratio govern narrow screens
+ * (where it looks right) while wide screens crop instead of grow. */
 .card {
   width: 100%;
   aspect-ratio: 16 / 10;
+  max-height: 260px;
+  object-fit: cover;
   border-radius: var(--radius-lg);
   border: none;
 }

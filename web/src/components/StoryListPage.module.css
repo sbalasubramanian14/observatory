@@ -57,6 +57,8 @@
   font-family: var(--font-serif);
   font-size: var(--text-xl);
   font-weight: 600;
+  font-variation-settings: "opsz" 90, "SOFT" 0, "WONK" 1;
+  letter-spacing: -0.02em;
   color: var(--color-text-primary);
   margin: 0 0 var(--space-2);
 }

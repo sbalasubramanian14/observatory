@@ -32,6 +32,8 @@
   font-family: var(--font-serif);
   font-size: var(--text-md);
   font-weight: 600;
+  font-variation-settings: "opsz" 40, "SOFT" 0, "WONK" 0;
+  letter-spacing: -0.01em;
   line-height: var(--leading-snug);
   color: var(--color-text-primary);
   text-decoration: none;
@@ -50,7 +52,7 @@
 .missingText {
   font-size: var(--text-sm);
   color: var(--color-text-tertiary);
-  font-style: italic;
+  letter-spacing: 0.02em;
 }
 
 .actionButton {
@@ -68,4 +70,59 @@
 .actionButton:hover {
   border-color: var(--color-accent);
   color: var(--color-accent);
+}
+
+/* Below 640px the three-across layout (thumb | body | action button) starves
+ * the headline: measured on a 390px viewport it left the title roughly
+ * 180px wide, wrapping every one or two words down a dozen lines. The row
+ * becomes a two-row grid instead -- thumb and meta on the first line,
+ * headline full-bleed underneath, action pinned to the meta line where it
+ * needs no width of its own.
+ *
+ * The DOM order is unchanged, so this is purely presentational: the same
+ * markup serves both, and nothing about the save/dismiss behaviour moves. */
+@media (max-width: 639px) {
+  .row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "thumb meta action"
+      "headline headline headline";
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    padding: var(--space-4);
+  }
+
+  .row > :global(picture),
+  .row > :global(img),
+  .row > :global(div):first-child {
+    grid-area: thumb;
+  }
+
+  .body {
+    display: contents;
+  }
+
+  .metaTop {
+    grid-area: meta;
+  }
+
+  .headline {
+    grid-area: headline;
+    font-size: var(--text-md);
+  }
+
+  /* The outlet/age line is the least important thing in the row; at this
+   * width it costs more than it earns, so it rides with the meta cluster. */
+  .meta {
+    grid-area: meta;
+    align-self: end;
+    display: none;
+  }
+
+  .actionButton {
+    grid-area: action;
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-xs);
+  }
 }

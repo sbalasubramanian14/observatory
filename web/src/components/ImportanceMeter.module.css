@@ -1,38 +1,48 @@
+/* Segmented importance gauge -- see ImportanceMeter.tsx for why this is
+ * ticks and not a bar. Warm ramp by tier; this is the ONLY warm colour in
+ * the interface, which is what makes importance the first thing the eye
+ * finds on a card. */
 .wrap {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   font-family: var(--font-mono);
+  flex: none;
 }
 
-.bar {
-  position: relative;
-  width: 40px;
-  height: 5px;
-  border-radius: var(--radius-pill);
-  background: var(--color-surface-sunken);
-  overflow: hidden;
+.ticks {
+  display: flex;
+  gap: 2px;
 }
 
-.fill {
-  position: absolute;
-  inset: 0;
-  border-radius: var(--radius-pill);
+.tick {
+  width: 3px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--color-border-strong);
+  opacity: 0.45;
 }
 
-.high .fill {
+.tickOn {
+  opacity: 1;
+}
+
+.high .tickOn {
   background: var(--color-importance-high);
 }
-.medium .fill {
+.medium .tickOn {
   background: var(--color-importance-medium);
 }
-.low .fill {
+.low .tickOn {
   background: var(--color-importance-low);
 }
 
 .value {
   font-size: var(--text-xs);
   font-weight: 600;
+  /* Tabular figures so the number does not jitter as scores change width. */
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
 }
 
 .high .value {

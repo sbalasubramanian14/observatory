@@ -38,7 +38,7 @@
 }
 
 .summaryEmpty {
-  font-style: italic;
+  letter-spacing: 0.02em;
   color: var(--color-text-tertiary);
 }
 
@@ -163,6 +163,7 @@
   display: block;
   font-family: var(--font-serif);
   font-size: var(--text-md);
+  font-variation-settings: "opsz" 30, "SOFT" 0, "WONK" 0;
   color: var(--color-text-primary);
   margin-bottom: var(--space-2);
 }

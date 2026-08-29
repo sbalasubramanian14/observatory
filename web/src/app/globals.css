@@ -12,67 +12,73 @@
 
 :root {
   /* surfaces */
-  --color-surface: #f7f5ef;
+  --color-surface: #f4f4f0;
   --color-surface-elevated: #ffffff;
-  --color-surface-sunken: #eeece2;
-  --color-overlay: rgba(25, 24, 20, 0.45);
+  --color-surface-sunken: #e8e8e2;
+  --color-overlay: rgba(16, 16, 20, 0.45);
 
   /* text */
-  --color-text-primary: #1a1a22;
-  --color-text-secondary: #5c5d6b;
-  --color-text-tertiary: #8d8e9c;
+  --color-text-primary: #101014;
+  --color-text-secondary: #55555f;
+  --color-text-tertiary: #8a8a95;
 
   /* structure */
-  --color-border: #e2ddd0;
-  --color-border-strong: #c9c2ac;
+  --color-border: #dedad6;
+  --color-border-strong: #c4c0b8;
 
   /* accent */
-  --color-accent: #2f4ed6;
-  --color-accent-strong: #23399e;
-  --color-accent-soft: #e7ebfc;
+  --color-accent: #6c4df6;
+  --color-accent-strong: #5334e0;
+  --color-accent-soft: #ece8fe;
   --color-accent-contrast: #ffffff;
 
   /* semantic importance scale (heat, high -> low) */
-  --color-importance-high: #c2410c;
-  --color-importance-high-soft: #fbe6da;
-  --color-importance-medium: #b7791f;
-  --color-importance-medium-soft: #f8eed9;
-  --color-importance-low: #5f6373;
-  --color-importance-low-soft: #eceaf1;
+  --color-importance-high: #e2481f;
+  --color-importance-high-soft: #fdeae3;
+  --color-importance-medium: #c98a16;
+  --color-importance-medium-soft: #fbf0dc;
+  --color-importance-low: #6b6b76;
+  --color-importance-low-soft: #ececef;
 
   /* semantic category accents */
-  --color-category-research: #2f4ed6;
-  --color-category-research-soft: #e7ebfc;
-  --color-category-default: #5f6373;
+  --color-category-research: #6c4df6;
+  --color-category-research-soft: #ece8fe;
+  --color-category-default: #6b6b76;
   --color-category-default-soft: #ececef;
 
   /* status */
-  --color-success: #15803d;
-  --color-success-soft: #e0f2e6;
-  --color-warning: #b7791f;
-  --color-warning-soft: #f8eed9;
-  --color-danger: #b91c1c;
+  --color-success: #157f4a;
+  --color-success-soft: #e0f2e8;
+  --color-warning: #c98a16;
+  --color-warning-soft: #fbf0dc;
+  --color-danger: #c02717;
   --color-danger-soft: #fbe4e1;
 
-  --shadow-sm: 0 1px 2px rgba(30, 26, 14, 0.06);
-  --shadow-md: 0 6px 20px rgba(30, 26, 14, 0.09);
+  --shadow-sm: 0 1px 2px rgba(16, 16, 20, 0.05);
+  --shadow-md: 0 8px 28px rgba(16, 16, 20, 0.08);
   --shadow-focus: 0 0 0 3px var(--color-accent-soft);
 
   /* type */
-  --font-serif: var(--font-newsreader), "Iowan Old Style", "Georgia", serif;
-  --font-sans: var(--font-inter), -apple-system, "Segoe UI", sans-serif;
-  --font-mono: var(--font-jbmono), "SFMono-Regular", Consolas, monospace;
+  /* Three registers, deliberately. --font-serif is EDITORIAL (headline,
+   * summary, analysis); --font-mono is INSTRUMENT (rank, score, band,
+   * category, source, counts, timestamps); --font-sans is everything else.
+   * The token NAMES are unchanged from the previous Newsreader/Inter/
+   * JetBrains stack on purpose -- every component already consumes these,
+   * so the family swap needed no component edits. */
+  --font-serif: var(--font-fraunces), "Iowan Old Style", "Georgia", serif;
+  --font-sans: var(--font-geist), -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), "SFMono-Regular", Consolas, monospace;
 
-  --text-xs: 0.75rem;
+  --text-xs: 0.6875rem;
   --text-sm: 0.8125rem;
   --text-base: 0.9375rem;
   --text-md: 1.0625rem;
-  --text-lg: 1.25rem;
-  --text-xl: 1.55rem;
-  --text-2xl: 1.95rem;
-  --text-3xl: 2.5rem;
+  --text-lg: 1.3rem;
+  --text-xl: 1.7rem;
+  --text-2xl: 2.2rem;
+  --text-3xl: 3rem;
 
-  --leading-tight: 1.15;
+  --leading-tight: 1.08;
   --leading-snug: 1.35;
   --leading-normal: 1.6;
 
@@ -87,9 +93,9 @@
   --space-8: 4.5rem;
 
   --radius-sm: 6px;
-  --radius-md: 10px;
+  --radius-md: 12px;
   --radius-lg: 18px;
-  --radius-xl: 28px;
+  --radius-xl: 26px;
   --radius-pill: 999px;
 
   --content-width: 780px;
@@ -103,9 +109,9 @@
    * space. Kept low-contrast against --color-surface so it stays ambient,
    * not decorative noise, behind opaque cards.
    */
-  --color-ambient-1: #eef1ff;
-  --color-ambient-2: #fdf1e6;
-  --color-ambient-3: #f7f5ef;
+  --color-ambient-1: #eeecfa;
+  --color-ambient-2: #f8f3ec;
+  --color-ambient-3: #f4f4f0;
 
   /* Deterministic per-source "avatar" chip backgrounds/text (StoryCard) --
    * cycled by a hash of the source id, never a hardcoded per-source colour. */
@@ -122,96 +128,96 @@
 /* System dark mode, only when the reader hasn't made an explicit choice. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --color-surface: #131319;
-    --color-surface-elevated: #1c1c25;
-    --color-surface-sunken: #0e0e13;
-    --color-overlay: rgba(0, 0, 0, 0.6);
+    --color-surface: #0c0c11;
+    --color-surface-elevated: #16161d;
+    --color-surface-sunken: #08080c;
+    --color-overlay: rgba(0, 0, 0, 0.62);
 
-    --color-text-primary: #edecf3;
-    --color-text-secondary: #a8a9ba;
-    --color-text-tertiary: #74768a;
+    --color-text-primary: #ececf0;
+    --color-text-secondary: #9c9caa;
+    --color-text-tertiary: #66667a;
 
-    --color-border: #2b2c38;
-    --color-border-strong: #3d3f4f;
+    --color-border: #24242e;
+    --color-border-strong: #363644;
 
-    --color-accent: #8b9dff;
-    --color-accent-strong: #aab8ff;
-    --color-accent-soft: #262c52;
-    --color-accent-contrast: #0e0e13;
+    --color-accent: #8b72ff;
+    --color-accent-strong: #a38fff;
+    --color-accent-soft: #1e1a38;
+    --color-accent-contrast: #0c0c11;
 
-    --color-importance-high: #f2916f;
-    --color-importance-high-soft: #402318;
-    --color-importance-medium: #f0c264;
-    --color-importance-medium-soft: #3c3018;
-    --color-importance-low: #9a9cb0;
-    --color-importance-low-soft: #23242e;
+    --color-importance-high: #ff6a3d;
+    --color-importance-high-soft: #2e1710;
+    --color-importance-medium: #e5a93b;
+    --color-importance-medium-soft: #2a2013;
+    --color-importance-low: #7a7a88;
+    --color-importance-low-soft: #1a1a22;
 
-    --color-category-research: #8b9dff;
-    --color-category-research-soft: #262c52;
-    --color-category-default: #9a9cb0;
-    --color-category-default-soft: #23242e;
+    --color-category-research: #8b72ff;
+    --color-category-research-soft: #1e1a38;
+    --color-category-default: #7a7a88;
+    --color-category-default-soft: #1a1a22;
 
     --color-success: #4ade80;
-    --color-success-soft: #17301f;
-    --color-warning: #f0c264;
-    --color-warning-soft: #3c3018;
+    --color-success-soft: #11241a;
+    --color-warning: #e5a93b;
+    --color-warning-soft: #2a2013;
     --color-danger: #f38b83;
     --color-danger-soft: #3d1e1c;
 
-    --color-ambient-1: #171a33;
-    --color-ambient-2: #1c1430;
-    --color-ambient-3: #0e0e13;
+    --color-ambient-1: #12111e;
+    --color-ambient-2: #0d1218;
+    --color-ambient-3: #0c0c11;
 
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.45);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-md: 0 8px 28px rgba(0, 0, 0, 0.55);
     --shadow-focus: 0 0 0 3px var(--color-accent-soft);
   }
 }
 
 /* Explicit user choice always wins, both directions. */
 :root[data-theme="dark"] {
-  --color-surface: #131319;
-  --color-surface-elevated: #1c1c25;
-  --color-surface-sunken: #0e0e13;
-  --color-overlay: rgba(0, 0, 0, 0.6);
+  --color-surface: #0c0c11;
+  --color-surface-elevated: #16161d;
+  --color-surface-sunken: #08080c;
+  --color-overlay: rgba(0, 0, 0, 0.62);
 
-  --color-text-primary: #edecf3;
-  --color-text-secondary: #a8a9ba;
-  --color-text-tertiary: #74768a;
+  --color-text-primary: #ececf0;
+  --color-text-secondary: #9c9caa;
+  --color-text-tertiary: #66667a;
 
-  --color-border: #2b2c38;
-  --color-border-strong: #3d3f4f;
+  --color-border: #24242e;
+  --color-border-strong: #363644;
 
-  --color-accent: #8b9dff;
-  --color-accent-strong: #aab8ff;
-  --color-accent-soft: #262c52;
-  --color-accent-contrast: #0e0e13;
+  --color-accent: #8b72ff;
+  --color-accent-strong: #a38fff;
+  --color-accent-soft: #1e1a38;
+  --color-accent-contrast: #0c0c11;
 
-  --color-importance-high: #f2916f;
-  --color-importance-high-soft: #402318;
-  --color-importance-medium: #f0c264;
-  --color-importance-medium-soft: #3c3018;
-  --color-importance-low: #9a9cb0;
-  --color-importance-low-soft: #23242e;
+  --color-importance-high: #ff6a3d;
+  --color-importance-high-soft: #2e1710;
+  --color-importance-medium: #e5a93b;
+  --color-importance-medium-soft: #2a2013;
+  --color-importance-low: #7a7a88;
+  --color-importance-low-soft: #1a1a22;
 
-  --color-category-research: #8b9dff;
-  --color-category-research-soft: #262c52;
-  --color-category-default: #9a9cb0;
-  --color-category-default-soft: #23242e;
+  --color-category-research: #8b72ff;
+  --color-category-research-soft: #1e1a38;
+  --color-category-default: #7a7a88;
+  --color-category-default-soft: #1a1a22;
 
   --color-success: #4ade80;
-  --color-success-soft: #17301f;
-  --color-warning: #f0c264;
-  --color-warning-soft: #3c3018;
+  --color-success-soft: #11241a;
+  --color-warning: #e5a93b;
+  --color-warning-soft: #2a2013;
   --color-danger: #f38b83;
   --color-danger-soft: #3d1e1c;
 
-  --color-ambient-1: #171a33;
-  --color-ambient-2: #1c1430;
-  --color-ambient-3: #0e0e13;
+  --color-ambient-1: #12111e;
+  --color-ambient-2: #0d1218;
+  --color-ambient-3: #0c0c11;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 8px 28px rgba(0, 0, 0, 0.55);
   --shadow-focus: 0 0 0 3px var(--color-accent-soft);
 }
 
@@ -250,7 +256,10 @@ h2,
 h3 {
   font-family: var(--font-serif);
   font-weight: 600;
+  font-variation-settings: "opsz" 100, "SOFT" 0, "WONK" 1;
+  letter-spacing: -0.02em;
   line-height: var(--leading-tight);
+  text-wrap: balance;
   margin: 0;
   letter-spacing: -0.01em;
 }

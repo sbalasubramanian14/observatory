@@ -42,6 +42,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Throwaway design comps (gitignored). Deliberately plain HTML/JS with
+    // hardcoded colours -- linting them as app source is noise.
+    "mockups/**",
   ]),
 ]);
 

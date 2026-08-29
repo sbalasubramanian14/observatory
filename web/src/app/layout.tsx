@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Newsreader, Inter, JetBrains_Mono } from "next/font/google";
+import { Fraunces, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider, THEME_INIT_SCRIPT } from "@/lib/theme";
 import { PersonalizationProvider } from "@/lib/personalization";
@@ -8,23 +8,35 @@ import { BottomNav } from "@/components/BottomNav";
 import { AmbientField } from "@/components/AmbientField";
 import { PwaStatus } from "@/components/PwaStatus";
 
-const newsreader = Newsreader({
-  variable: "--font-newsreader",
+// EDITORIAL register — headlines, summaries, analysis.
+//
+// `axes` is load-bearing here, not decoration: next/font/google ships ONLY
+// the wght axis for a variable font by default (verified in
+// node_modules/next/dist/docs/01-app/03-api-reference/02-components/font.md
+// §axes), so without this list every `font-variation-settings: "opsz" ...`
+// in the stylesheets would silently do nothing. opsz is what lets one
+// family read as a display face at 2.2rem and as a text face at 1rem;
+// SOFT/WONK carry the character that keeps it from looking like stock
+// Georgia. No `weight` — supplying one would pin it to a static instance
+// and defeat the variable axes.
+const fraunces = Fraunces({
+  variable: "--font-fraunces",
   subsets: ["latin"],
-  style: ["normal", "italic"],
-  weight: ["400", "500", "600"],
+  axes: ["SOFT", "WONK", "opsz"],
 });
 
-const inter = Inter({
-  variable: "--font-inter",
+// UI register — controls, body copy, anything not a headline or a metric.
+const geist = Geist({
+  variable: "--font-geist",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
 });
 
-const jbMono = JetBrains_Mono({
-  variable: "--font-jbmono",
+// INSTRUMENT register — rank, score, band, category, source, counts,
+// timestamps. Geist Mono is designed as a pair with Geist above, which is
+// why the metadata layer reads as engineered rather than assembled.
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
   subsets: ["latin"],
-  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {
@@ -52,17 +64,41 @@ export const metadata: Metadata = {
 // globals.css's --color-surface (light) and dark data-theme block; there
 // is nothing to re-derive them from at this layer.
 export const viewport: Viewport = {
+  // viewport-fit=cover. Without this, iOS reports every
+  // env(safe-area-inset-*) as 0, which silently defeated FIVE call sites
+  // that depend on it: globals.css's .appShell > main bottom padding,
+  // BottomNav.module.css (x2), PwaStatus.module.css, and
+  // StoryDeck.module.css. Combined with appleWebApp.statusBarStyle
+  // "black-translucent" above -- which deliberately extends content under
+  // the status bar -- the installed iPhone PWA was drawing its floating
+  // nav inside the home-indicator zone. The insets were always written
+  // correctly; they were just never switched on.
+  viewportFit: "cover",
   themeColor: [
     // eslint-disable-next-line no-restricted-syntax -- see comment above
-    { media: "(prefers-color-scheme: light)", color: "#f7f5ef" },
+    { media: "(prefers-color-scheme: light)", color: "#f4f4f0" },
     // eslint-disable-next-line no-restricted-syntax -- see comment above
-    { media: "(prefers-color-scheme: dark)", color: "#131319" },
+    { media: "(prefers-color-scheme: dark)", color: "#0c0c11" },
   ],
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    // The three next/font `.variable` classes belong on <html>, NOT <body>.
+    // globals.css builds --font-serif/--font-sans/--font-mono at :root from
+    // var(--font-fraunces) etc; a custom property set on <body> is invisible
+    // to a rule on :root, because custom properties inherit downward only.
+    // With them on <body> the :root declarations were invalid at
+    // computed-value time, so --font-serif/-sans/-mono inherited as
+    // guaranteed-invalid and EVERY font-family in the app silently fell back
+    // to the browser default -- measured: the whole UI rendered in Times New
+    // Roman, on this build and on HEAD before it. Moving them up one element
+    // is the entire fix.
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${fraunces.variable} ${geist.variable} ${geistMono.variable}`}
+    >
       <head>
         {/* Set data-theme before paint to avoid a flash of the wrong theme. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
@@ -78,7 +114,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="dns-prefetch" href="https://raw.githubusercontent.com" />
         <link rel="dns-prefetch" href="https://wsrv.nl" />
       </head>
-      <body className={`${newsreader.variable} ${inter.variable} ${jbMono.variable}`}>
+      <body>
         <ThemeProvider>
           <PersonalizationProvider>
             <AmbientField />

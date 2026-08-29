@@ -112,6 +112,9 @@
   font-family: var(--font-serif);
   font-size: var(--text-lg);
   font-weight: 600;
+  font-variation-settings: "opsz" 72, "SOFT" 0, "WONK" 1;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
   line-height: var(--leading-tight);
   color: var(--color-text-primary);
   text-decoration: none;
@@ -134,7 +137,7 @@
 }
 
 .summaryEmpty {
-  font-style: italic;
+  letter-spacing: 0.02em;
   color: var(--color-text-tertiary);
 }
 
